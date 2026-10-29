@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Греческий курс</title>
+<meta name="description" content="Библейский греческий по учебнику Маунса: план на каждый день, алфавит, слова, карточки и тест">
+<meta name="theme-color" content="#F4EFE4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1C1916" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Греческий">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/favicon-32.png?v=1" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=1">
+<link rel="preload" href="/fonts/GentiumPlus-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/app.css?v=1">
+<script>try{var t=JSON.parse(localStorage.getItem('gk_theme')||'""');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+</head>
+<body>
+
+<section class="auth" id="auth" hidden>
+  <div class="auth-card">
+    <div class="auth-brand"><span class="logo" aria-hidden="true">αω</span><h1>Греческий курс</h1><p id="auth-sub">по учебнику Маунса</p></div>
+    <div id="auth-body"></div>
+  </div>
+</section>
+
+<div id="app" hidden>
+<nav class="nav" id="nav" aria-label="Разделы приложения">
+  <a href="#/" class="brand"><span class="logo" aria-hidden="true">αω</span><span><b>Греческий курс</b><small>по учебнику Маунса</small></span></a>
+  <div class="nav-in">
+    <a href="#/" class="tab" data-tab="today"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M9 15l2 2 4-4"/></svg><span>Сегодня</span></a>
+    <a href="#/course" class="tab" data-tab="course"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5C4.7 20 4 19.3 4 18.5z M20 5.5C20 4.7 19.3 4 18.5 4H13v16h5.5c.8 0 1.5-.7 1.5-1.5z"/></svg><span>Курс</span></a>
+    <a href="#/dict" class="tab" data-tab="dict"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/><path d="M9 13.5l2-5 2 5M9.7 12h2.6"/></svg><span>Словарь</span></a>
+    <a href="#/progress" class="tab" data-tab="progress"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V12M12 20V6M19 20v-9"/><path d="M3 20h18"/></svg><span>Прогресс</span></a>
+  </div>
+</nav>
+<div class="page">
+  <div class="update-bar" id="update-bar" hidden><div><span>Вышло обновление приложения.</span><button type="button" class="btn sm primary" id="update-btn">Обновить</button><button type="button" class="icon-btn" id="update-close" aria-label="Скрыть">×</button></div></div>
+  <div class="notice" id="notice" hidden><div id="notice-text"></div></div>
+  <main id="main"><div class="loading">Загружаю…</div></main>
+</div>
+</div>
+
+<dialog id="dlg"><form id="dlg-form" novalidate></form></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/vendor/pocketbase.umd.js"></script>
+<script src="/data/letters.js?v=1"></script>
+<script src="/data/words.js?v=1"></script>
+<script src="/data/chapters.js?v=1"></script>
+<script src="/app.js?v=1"></script>
+</body>
+</html>
