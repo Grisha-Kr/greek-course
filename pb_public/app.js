@@ -32,6 +32,9 @@ const ICON = {
   table: svg('<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10"/>'),
   pen: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
   done: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>'),
+  left: svg('<path d="M15 5l-7 7 7 7"/>'),
+  right: svg('<path d="M9 5l7 7-7 7"/>'),
+  cal: svg('<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>'),
 };
 
 /* ---------- Состояние ---------- */
@@ -71,6 +74,11 @@ const todayISO = () => isoOf(new Date());
 const addDays = (iso, k) => { const [y,m,d] = iso.split('-').map(Number); return isoOf(new Date(y, m-1, d + k)); };
 const MONF = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WDF = ['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
+const MONN = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const MONP = ['январе','феврале','марте','апреле','мае','июне','июле','августе','сентябре','октябре','ноябре','декабре'];
+const WDM = ['пн','вт','ср','чт','пт','сб','вс']; // неделя с понедельника
+const monIndex = d => (d.getDay() + 6) % 7;  // 0 = понедельник
+const weekStart = () => addDays(todayISO(), -monIndex(new Date())); // понедельник текущей недели
 const longDate = () => { const d = new Date(); return `${WDF[d.getDay()]}, ${d.getDate()} ${MONF[d.getMonth()]}`; };
 const fmtDay = iso => { if(!iso) return ''; const [y,m,d] = iso.split('-').map(Number); return d + ' ' + MONF[m-1] + (y !== new Date().getFullYear() ? ' ' + y : ''); };
 const plural = (n, f) => { n = Math.abs(n) % 100; const n1 = n % 10; if(n > 10 && n < 20) return f[2]; if(n1 > 1 && n1 < 5) return f[1]; if(n1 === 1) return f[0]; return f[2]; };
@@ -280,6 +288,14 @@ function taskInfo(t){
   if(t.key === 'new') return {title: `Новые слова, ${chRange(t.words || [])} · ${n}`, min: Math.max(2, Math.ceil(n * 25 / 60)), href: '#/task/new'};
   return {title: 'Алфавит', sub: `трудные и невыученные: ${n} ${plural(n, LET_F)}`, min: Math.max(2, Math.ceil(n * 8 / 60)), href: '#/task/alphabet'};
 }
+// День в календаре: full: план выполнен полностью, half: сделано хотя бы одно задание, '': занятий не было
+function dayState(p){
+  if(!p) return '';
+  const t = p.tasks || [];
+  if(p.done && t.length) return 'full';
+  return t.some(x => x.done) ? 'half' : '';
+}
+const planMap = () => new Map(S.plans.map(p => [p.date, p]));
 // Дней подряд с выполненным планом: считаем от сегодня, а если сегодня ещё не выполнен, от вчера
 function streak(){
   const done = new Set(S.plans.filter(p => p.done).map(p => p.date));
@@ -390,8 +406,10 @@ function render(force){
   v.init && v.init(r);
 }
 const initial = u => (String(u.name || u.email || '?').trim()[0] || '?').toUpperCase();
+// Кружок профиля: фото или первая буква имени
+const avatarInner = u => { const src = avatarSrc(u); return src ? `<img src="${esc(src)}" alt="">` : esc(initial(u)); };
 const backLink = (href, text) => `<a class="backlink" href="${href}" data-back="${href}">${ICON.back}<span>${esc(text)}</span></a>`;
-const headActs = () => `<div class="head-acts"><button type="button" class="round" data-act="theme" aria-label="${isDark() ? 'Светлая тема' : 'Тёмная тема'}">${isDark() ? ICON.sun : ICON.moon}</button><a class="me" href="#/profile" aria-label="Профиль">${esc(initial(me()))}</a></div>`;
+const headActs = () => `<div class="head-acts"><button type="button" class="round" data-act="theme" aria-label="${isDark() ? 'Светлая тема' : 'Тёмная тема'}">${isDark() ? ICON.sun : ICON.moon}</button><a class="me" href="#/profile" aria-label="Профиль" data-av>${avatarInner(me())}</a></div>`;
 const head = (title, sub) => `<header class="head"><div class="head-t"><h1>${esc(title)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div>${headActs()}</header>`;
 const subHead = (href, text, title, sub) => `<div class="nav-head">${backLink(href, text)}${headActs()}</div><header class="sub-head"><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ''}</header>`;
 const bar = (part, total, cls) => `<div class="pbar${cls ? ' ' + cls : ''}"><i style="width:${total ? Math.round(part / total * 100) : 0}%"></i></div>`;
@@ -843,8 +861,7 @@ function aqFinish(){
 function vProgress(){
   const c = wordCounts(), total = WORDS.length, kn = lettersKnown(), st = streak();
   const parts = [['sure', 'Уверенно', 'интервал от двух недель'], ['learn', 'В изучении', ''], ['hard', 'Трудные', 'ошибка или «Повторить»'], ['new', 'Впереди', 'ещё не начаты']];
-  const done7 = Array.from({length: 7}, (_, i) => addDays(today(), i - 6));
-  const doneSet = new Set(S.plans.filter(p => p.done).map(p => p.date));
+  const week = Array.from({length: 7}, (_, i) => addDays(weekStart(), i)), plans = planMap(), t = today();
   return `${head('Прогресс', 'Слова, алфавит и дни занятий')}
     <div class="cols"><div class="col">
       <section class="card"><div class="plan-top"><h2>Слова минимума</h2><span class="muted">${total} слов</span></div>
@@ -854,9 +871,11 @@ function vProgress(){
     </div><div class="col">
       <section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${kn} из ${LETTERS.length}</span></div>${bar(kn, LETTERS.length, 'good')}
         <a class="btn" href="#/abc">Открыть алфавит</a></section>
-      <section class="card"><div class="plan-top"><h2>План выполнен</h2><span class="muted">${st} ${plural(st, DAYS_F)} подряд</span></div>
-        <div class="days">${done7.map(d => { const [, , dd] = d.split('-').map(Number), wd = ['вс','пн','вт','ср','чт','пт','сб'][new Date(d + 'T12:00').getDay()];
-          return `<span class="${doneSet.has(d) ? 'on' : ''}${d === today() ? ' today' : ''}"><small>${wd}</small><i>${doneSet.has(d) ? ICON.check : dd}</i></span>`; }).join('')}</div>
+      <section class="card week-card" data-act="calendar" role="button" tabindex="0" aria-label="План выполнен: ${st} ${plural(st, DAYS_F)} подряд. Открыть календарь занятий">
+        <div class="plan-top"><h2>План выполнен</h2><span class="muted">${st} ${plural(st, DAYS_F)} подряд</span></div>
+        <div class="days" aria-hidden="true">${week.map((d, i) => { const dd = +d.slice(8), s = dayState(plans.get(d));
+          return `<span class="${s}${d === t ? ' today' : ''}${d > t ? ' future' : ''}"><small>${WDM[i]}</small><i>${s === 'full' ? ICON.check : dd}</i></span>`; }).join('')}</div>
+        <span class="week-more">${ICON.cal}Календарь занятий${ICON.chev}</span>
       </section>
     </div></div>`;
 }
@@ -867,7 +886,8 @@ function vProfile(){
   const inv = S.invites.slice().sort((a, b) => String(b.created).localeCompare(String(a.created)));
   return `<div class="nav-head">${backLink('#/', 'Сегодня')}${headActs()}</div><header class="sub-head"><h1>Профиль</h1></header>
     <div class="cols"><div class="col">
-    <section class="card me-card"><span class="me lg" aria-hidden="true">${esc(initial(u))}</span><div class="who"><b>${esc(u.name || 'Без имени')}</b><span>${esc(u.email || '')}</span></div>
+    <section class="card me-card"><span class="me xl" aria-hidden="true" data-av>${avatarInner(u)}</span><div class="who"><b>${esc(u.name || 'Без имени')}</b><span>${esc(u.email || '')}</span>
+        <button type="button" class="btn sm" data-act="avatar">${u.avatar ? 'Изменить фото' : 'Поставить фото'}</button></div>
       <button type="button" class="icon-btn" data-act="edit-name" aria-label="Изменить имя">${ICON.pen}</button></section>
     <section class="card"><h2>Оформление</h2>
       <div class="seg3" role="radiogroup" aria-label="Тема">${[['light','Светлая'],['dark','Тёмная'],['auto','Как в системе']].map(([k, l]) =>
@@ -902,6 +922,284 @@ window.addEventListener('hashchange', () => { if(route().name === 'profile' && S
 document.addEventListener('change', e => { if(e.target.name === 'p-theme') setTheme(e.target.value); });
 // открытый блок «Приглашения» остаётся открытым после перерисовки
 document.addEventListener('toggle', e => { const f = e.target.dataset && e.target.dataset.fold; if(f) e.target.open ? UI.folds.add(f) : UI.folds.delete(f); }, true);
+
+/* ---------- Фото профиля ---------- */
+// Хранится только круг 400×400 (JPEG) в users.avatar, файл защищённый: загружается по токену.
+// Загруженное фото держим в памяти и на устройстве (data:), чтобы кружок был с фото и без интернета.
+const MAX_PHOTO = 10 * 1024 * 1024, ROUND = 400;
+let tokP = null, tokAt = 0;
+function fileToken(){
+  if(!tokP || Date.now() - tokAt > 100e3){ tokAt = Date.now(); tokP = pb.files.getToken().catch(e => { tokP = null; throw e; }); }
+  return tokP;
+}
+const AV = {name: '', src: '', failAt: 0};
+function avatarSrc(u){
+  if(!u || !u.avatar) return '';
+  if(AV.name === u.avatar) return AV.src;
+  const c = loadLS('avatar_' + u.id, null);
+  if(c && c.name === u.avatar){ AV.name = c.name; AV.src = c.src; return c.src; }
+  if(Date.now() - AV.failAt > 60e3) loadAvatar(u);
+  return '';
+}
+async function loadAvatar(u){
+  const name = u.avatar;
+  AV.name = name; AV.src = '';
+  try {
+    const res = await fetch(pb.files.getURL(u, name, {token: await fileToken()}));
+    if(!res.ok) throw new Error('Фото не загрузилось.');
+    const blob = await res.blob();
+    const src = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(blob); });
+    if(AV.name !== name) return;
+    AV.src = src; saveLS('avatar_' + u.id, {name, src});
+    refreshAvatars();
+  } catch(e){ if(AV.name === name){ AV.name = ''; AV.failAt = Date.now(); } }
+}
+function refreshAvatars(){ $$('[data-av]').forEach(el => { el.innerHTML = avatarInner(me()); }); }
+// Фото уменьшаем в браузере до 1600 точек по длинной стороне: так обрезка работает быстро и на телефоне
+async function preparePhoto(file){
+  if(file.size > MAX_PHOTO) throw new Error('Фото больше 10 МБ. Выберите фото поменьше.');
+  let img;
+  try { img = await createImageBitmap(file); }
+  catch(e){
+    try { img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); }); }
+    catch(e2){
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      throw new Error(['heic', 'heif'].includes(ext) ? 'Это фото в формате HEIC не открывается в этом браузере. Выберите фото в формате JPG или PNG.' : 'Не удалось открыть картинку. Выберите фото в формате JPG, PNG, WEBP или HEIC.');
+    }
+  }
+  const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+  const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.9));
+  if(!blob) throw new Error('Не удалось обработать фото.');
+  return blob;
+}
+
+/* окно обрезки по кругу (как в «Молитвенном дневнике»): центр круга cx, cy в долях фото и увеличение z от 1 до 4;
+   при z = 1 короткая сторона фото ровно вписана в круг */
+const cropDlg = $('#crop'), cropStage = $('#crop-stage'), cropImg = $('#crop-img');
+const CR = {img: null, W: 0, H: 0, cx: .5, cy: .5, z: 1, resolve: null, seq: 0};
+const ZMAX = 4;
+const clampZ = z => Math.min(ZMAX, Math.max(1, +z || 1));
+// Открывает окно с новым файлом (file) или с уже сохранённым фото (src). Возвращает {round}, {remove: true} или null (отмена)
+function cropPhoto(o){
+  return new Promise(resolve => {
+    if(CR.resolve) CR.resolve(null);
+    Object.assign(CR, {resolve, img: null});
+    const rm = $('#crop-remove');
+    rm.hidden = !o.canRemove; rm.dataset.armed = ''; rm.textContent = 'Удалить фото';
+    if(!cropDlg.open) cropDlg.showModal();
+    if(o.file) cropLoadFile(o.file);
+    else { const seq = ++CR.seq; cropMsg('Открываю фото…'); cropSetImage(o.src, seq).catch(() => { if(seq === CR.seq) cropMsg('Фото не открылось. Выберите другое.'); }); }
+  });
+}
+function cropMsg(text){
+  const m = $('#crop-msg');
+  m.textContent = text || ''; m.hidden = !text;
+  cropImg.hidden = !!text;
+  cropDlg.classList.toggle('no-img', !!text);
+}
+async function cropLoadFile(file){
+  const seq = ++CR.seq;
+  CR.img = null; cropMsg('Открываю фото…');
+  try {
+    const blob = await preparePhoto(file);
+    if(seq === CR.seq) await cropSetImage(URL.createObjectURL(blob), seq);
+  } catch(e){ if(seq === CR.seq) cropMsg(errText(e)); }
+}
+function cropSetImage(url, seq){
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => {
+      if(seq !== CR.seq) return res();
+      Object.assign(CR, {img: im, W: im.naturalWidth, H: im.naturalHeight, cx: .5, cy: .5, z: 1});
+      cropImg.src = url;
+      cropDlg.querySelectorAll('.pv-photo img').forEach(i => { i.src = url; });
+      cropMsg('');
+      cropDraw();
+      res();
+    };
+    im.onerror = rej;
+    im.src = url;
+  });
+}
+const cropD = () => cropStage.clientWidth * 0.8; // диаметр круга на экране
+// Фото не может уйти так, чтобы в круге осталась пустота
+function cropClamp(){
+  const k = Math.min(CR.W, CR.H) / CR.z / 2; // половина стороны круга в точках фото
+  CR.cx = Math.min(1 - k / CR.W, Math.max(k / CR.W, CR.cx));
+  CR.cy = Math.min(1 - k / CR.H, Math.max(k / CR.H, CR.cy));
+}
+// Ставит фото так, чтобы центр обрезки оказался в точке center, при масштабе s
+function cropPlace(img, center, s){
+  img.style.width = CR.W + 'px'; img.style.height = CR.H + 'px';
+  img.style.transform = `translate(${center - CR.cx * CR.W * s}px, ${center - CR.cy * CR.H * s}px) scale(${s})`;
+}
+let cropRaf = 0;
+function cropDraw(){
+  if(cropRaf) return;
+  cropRaf = requestAnimationFrame(() => {
+    cropRaf = 0;
+    if(!CR.img) return;
+    cropClamp();
+    const D = cropD(), s = D / Math.min(CR.W, CR.H) * CR.z;
+    cropPlace(cropImg, cropStage.clientWidth / 2, s);
+    $('#crop-z').value = CR.z;
+    cropDlg.querySelectorAll('.pv-photo').forEach(el => { const d = el.clientWidth; cropPlace(el.querySelector('img'), d / 2, s * d / D); });
+  });
+}
+// Пальцы и мышь: один палец двигает, два пальца увеличивают и двигают
+const ptrs = new Map();
+cropStage.addEventListener('pointerdown', e => {
+  if(!CR.img) return;
+  try { cropStage.setPointerCapture(e.pointerId); } catch(err){}
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
+});
+cropStage.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId);
+  if(!p || !CR.img) return;
+  const before = [...ptrs.values()].map(q => ({...q}));
+  p.x = e.clientX; p.y = e.clientY;
+  const after = [...ptrs.values()];
+  const s = cropD() / Math.min(CR.W, CR.H) * CR.z;
+  let dx, dy;
+  if(after.length === 1){ dx = after[0].x - before[0].x; dy = after[0].y - before[0].y; }
+  else {
+    const mid = a => ({x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2});
+    const dist = a => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1;
+    const m0 = mid(before), m1 = mid(after);
+    dx = m1.x - m0.x; dy = m1.y - m0.y;
+    CR.z = clampZ(CR.z * dist(after) / dist(before));
+  }
+  CR.cx -= dx / (s * CR.W); CR.cy -= dy / (s * CR.H);
+  cropDraw();
+});
+const ptrEnd = e => ptrs.delete(e.pointerId);
+cropStage.addEventListener('pointerup', ptrEnd);
+cropStage.addEventListener('pointercancel', ptrEnd);
+cropStage.addEventListener('wheel', e => { if(!CR.img) return; e.preventDefault(); CR.z = clampZ(CR.z * Math.exp(-e.deltaY * 0.0015)); cropDraw(); }, {passive: false});
+$('#crop-z').addEventListener('input', e => { if(!CR.img) return; CR.z = clampZ(e.target.value); cropDraw(); });
+window.addEventListener('resize', () => { if(cropDlg.open) cropDraw(); });
+$('#crop-file').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if(f) cropLoadFile(f); });
+function cropFinish(result){ const r = CR.resolve; CR.resolve = null; CR.seq++; ptrs.clear(); if(cropDlg.open) cropDlg.close(); r && r(result); }
+$('#crop-cancel').addEventListener('click', () => cropFinish(null));
+cropDlg.addEventListener('close', () => { if(CR.resolve) cropFinish(null); });
+$('#crop-remove').addEventListener('click', e => { if(arm(e.currentTarget, 'Точно удалить фото?')) cropFinish({remove: true}); });
+$('#crop-done').addEventListener('click', async e => {
+  if(!CR.img){ toast('Сначала выберите фото.'); return; }
+  const btn = e.currentTarget; btn.disabled = true;
+  try {
+    cropClamp();
+    const side = Math.min(CR.W, CR.H) / CR.z;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = ROUND;
+    const g = cv.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(CR.img, CR.cx * CR.W - side / 2, CR.cy * CR.H - side / 2, side, side, 0, 0, ROUND, ROUND);
+    const round = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.88));
+    if(!round) throw new Error('Не удалось обработать фото.');
+    cropFinish({round});
+  } catch(err){ toast(errText(err)); }
+  finally { btn.disabled = false; }
+});
+// Выбор файла: скрытое поле в документе (в «Выбрать другое фото» внутри окна своё поле)
+const picker = document.createElement('input');
+picker.type = 'file'; picker.accept = 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif'; picker.className = 'picker';
+let pickCb = null;
+picker.addEventListener('change', () => { const f = picker.files[0], cb = pickCb; picker.value = ''; pickCb = null; if(f && cb) cb(f); });
+function pickPhoto(cb){ pickCb = cb; document.body.appendChild(picker); picker.click(); }
+// Фото уже есть: открываем его в окне (можно сдвинуть, заменить или удалить), иначе сначала выбор файла
+async function askAvatar(){
+  if(!navigator.onLine){ toast('Без интернета фото не сохранить. Попробуйте, когда связь вернётся.'); return; }
+  const u = me(), src = avatarSrc(u);
+  const ph = await (u.avatar && src ? cropPhoto({src, canRemove: true}) : new Promise(res => pickPhoto(file => cropPhoto({file, canRemove: !!u.avatar}).then(res))));
+  if(!ph) return;
+  toast(ph.remove ? 'Удаляю фото…' : 'Сохраняю фото…');
+  try {
+    const r = await pb.collection('users').update(u.id, {avatar: ph.remove ? null : new File([ph.round], 'avatar.jpg', {type: 'image/jpeg'})});
+    if(!ph.remove){
+      const src = await new Promise(ok => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(ph.round); });
+      Object.assign(AV, {name: r.avatar, src}); saveLS('avatar_' + u.id, {name: r.avatar, src});
+    } else saveLS('avatar_' + u.id, null);
+    pb.authStore.save(pb.authStore.token, r);
+    render(true);
+    toast(ph.remove ? 'Фото удалено' : 'Фото сохранено');
+  } catch(e){ toast(errText(e)); }
+}
+
+/* ---------- Календарь занятий: месяц и год, только просмотр ---------- */
+// Полный день: план выполнен целиком; неполный: сделано хотя бы одно задание
+const calDlg = $('#cal');
+const CAL = {view: 'month', y: 0, m: 0};
+function studiedIn(prefix){
+  let all = 0, full = 0;
+  S.plans.forEach(p => { if(!String(p.date).startsWith(prefix)) return; const st = dayState(p); if(st){ all++; if(st === 'full') full++; } });
+  return {all, full};
+}
+function calMonthCells(y, m, mini, plans){
+  const first = new Date(y, m, 1), n = new Date(y, m + 1, 0).getDate(), t = todayISO();
+  let html = '<span class="cd blank"></span>'.repeat(monIndex(first));
+  for(let d = 1; d <= n; d++){
+    const iso = `${y}-${pad(m + 1)}-${pad(d)}`, st = dayState(plans.get(iso));
+    const cls = `cd${st ? ' ' + st : ''}${iso === t ? ' today' : ''}${iso > t ? ' future' : ''}`;
+    html += mini ? `<span class="${cls}"></span>` : `<span class="${cls}" aria-label="${d} ${MONF[m]}${st === 'full' ? ', план выполнен' : st === 'half' ? ', часть плана' : ''}">${d}</span>`;
+  }
+  return html;
+}
+const studiedText = c => c.all ? `занимались ${c.all} ${plural(c.all, DAYS_F)}${c.full ? `, из них весь план ${c.full}` : ''}` : 'занятий не было';
+function calSel(el){
+  const d = el && calDlg.contains(el) ? el.dataset : null;
+  if(!d || !d.cal) return '';
+  return d.m ? `[data-cal="open"][data-m="${d.m}"]` : `[data-cal="${d.cal}"]`;
+}
+function renderCal(sel){
+  const {view, y, m} = CAL, month = view === 'month', plans = planMap();
+  const now = new Date(), thisYear = now.getFullYear();
+  const title = month ? `${MONN[m]} ${y}` : String(y);
+  const where = month ? (y === thisYear && m === now.getMonth() ? 'В этом месяце' : `В ${MONP[m]}${y !== thisYear ? ' ' + y : ''}`) : (y === thisYear ? 'В этом году' : `В ${y} году`);
+  const sum = studiedIn(month ? `${y}-${pad(m + 1)}-` : `${y}-`);
+  const body = month
+    ? `<div class="cal-wd" aria-hidden="true">${WDM.map(w => `<span>${w}</span>`).join('')}</div><div class="cal-grid">${calMonthCells(y, m, false, plans)}</div>`
+    : `<div class="cal-year">${MONN.map((name, i) => { const k = studiedIn(`${y}-${pad(i + 1)}-`); return `<button type="button" class="cal-mini" data-cal="open" data-m="${i}" aria-label="${name}: ${studiedText(k)}"><b>${name}</b><span class="mini-grid" aria-hidden="true">${calMonthCells(y, i, true, plans)}</span></button>`; }).join('')}</div>`;
+  if(sel === undefined) sel = calSel(document.activeElement);
+  calDlg.innerHTML = `<div class="cal-in">
+    <div class="dlg-head"><h2>Календарь занятий</h2><button type="button" class="icon-btn" data-cal="close" aria-label="Закрыть">×</button></div>
+    <div class="cal-body">
+      ${seg('cal', [['month', 'Месяц'], ['year', 'Год']], view, 'Вид календаря')}
+      <div class="cal-nav"><button type="button" class="icon-btn" data-cal="prev" aria-label="${month ? 'Предыдущий месяц' : 'Предыдущий год'}">${ICON.left}</button><b aria-live="polite">${title}</b><button type="button" class="icon-btn" data-cal="next" aria-label="${month ? 'Следующий месяц' : 'Следующий год'}">${ICON.right}</button></div>
+      <p class="cal-sum">${where}: ${studiedText(sum)}</p>
+      ${body}
+      <ul class="cal-legend"><li><span class="cd full"></span>план выполнен</li><li><span class="cd half"></span>часть плана</li><li><span class="cd today"></span>сегодня</li></ul>
+    </div></div>`;
+  const el = sel && calDlg.querySelector(sel);
+  if(el) el.focus();
+}
+// Календарь закрывается крестиком, по фону, клавишей Esc и жестом «назад» (для этого шаг в истории)
+function openCalendar(){
+  const d = new Date();
+  Object.assign(CAL, {view: 'month', y: d.getFullYear(), m: d.getMonth()});
+  renderCal();
+  calDlg.showModal();
+  history.pushState({cal: 1}, '');
+}
+calDlg.addEventListener('close', () => { if(history.state && history.state.cal) history.back(); });
+window.addEventListener('popstate', () => { if(calDlg.open) calDlg.close(); });
+calDlg.addEventListener('click', e => {
+  if(e.target === calDlg){ calDlg.close(); return; }
+  const b = e.target.closest('[data-cal]');
+  if(!b) return;
+  const act = b.dataset.cal, sel = act === 'open' ? '[data-cal="month"]' : calSel(b);
+  if(act === 'close'){ calDlg.close(); return; }
+  if(act === 'month' || act === 'year') CAL.view = act;
+  else if(act === 'open'){ CAL.view = 'month'; CAL.m = +b.dataset.m; }
+  else if(act === 'prev' || act === 'next'){
+    const k = act === 'prev' ? -1 : 1;
+    if(CAL.view === 'year') CAL.y += k;
+    else { const d = new Date(CAL.y, CAL.m + k, 1); CAL.y = d.getFullYear(); CAL.m = d.getMonth(); }
+  }
+  renderCal(sel);
+});
 
 /* ---------- Диалог с формой ---------- */
 const dlg = $('#dlg'), form = $('#dlg-form');
@@ -968,10 +1266,17 @@ document.addEventListener('click', async e => {
   const d = a.dataset;
   switch(d.act){
     case 'theme': setTheme(isDark() ? 'light' : 'dark'); if(route().name === 'profile') render(true); break;
+    case 'avatar': askAvatar(); break;
+    case 'calendar': openCalendar(); break;
     case 'edit-name': openForm({title: 'Имя', fields: [{key: 'name', label: 'Как вас зовут', max: 100}], values: {name: me().name || ''},
       async onSave(v){ const r = await pb.collection('users').update(me().id, {name: v.name}); pb.authStore.save(pb.authStore.token, r); render(true); }}); break;
     default: accountAction(a, d);
   }
+});
+
+document.addEventListener('keydown', e => {
+  const a = e.target.closest && e.target.closest('#main [role="button"][data-act]');
+  if(a && (e.key === 'Enter' || e.key === ' ')){ e.preventDefault(); a.click(); }
 });
 
 /* ---------- Вход и регистрация ---------- */
@@ -1058,7 +1363,7 @@ async function copyText(text){
   try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); }
   catch(e){ window.prompt && window.prompt('Скопируйте:', text); }
 }
-function signOut(){ saveLS(cacheKey(), null); saveLS(qKey(), null); pb.authStore.clear(); location.hash = ''; location.reload(); }
+function signOut(){ saveLS(cacheKey(), null); saveLS(qKey(), null); saveLS('avatar_' + me().id, null); pb.authStore.clear(); location.hash = ''; location.reload(); }
 async function accountAction(a, d){
   try{
     switch(d.act){
@@ -1098,7 +1403,7 @@ async function accountAction(a, d){
 }
 
 let tt = 0;
-function toast(msg){ const el = $('#toast'); const host = dlg.open ? dlg : document.body; if(el.parentNode !== host) host.appendChild(el); el.textContent = msg; el.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => el.classList.remove('show'), 2800); }
+function toast(msg){ const el = $('#toast'); const host = [cropDlg, calDlg, dlg].find(x => x.open) || document.body; if(el.parentNode !== host) host.appendChild(el); el.textContent = msg; el.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => el.classList.remove('show'), 2800); }
 
 boot();
 })();
