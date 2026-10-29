@@ -406,3 +406,63 @@ dialog::backdrop{background:rgba(20,14,10,.45)}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 @media (min-width: 900px){ .toast{bottom:32px;left:calc(50% + var(--nav-w) / 2)} }
 @media (prefers-reduced-motion: reduce){ .fcard,.pbar i{transition:none} }
+
+/* ---------- Этап 2: словарь, карточка слова, основные формы ---------- */
+.filters{display:grid;grid-template-columns:1fr;gap:8px}
+@media (min-width: 600px){ .filters{grid-template-columns:repeat(3,minmax(0,1fr))} }
+.dict-tools > .seg{min-height:44px}
+.dict-tools > .seg button{min-height:40px;font-size:14.5px}
+.dot.a{background:transparent;box-shadow:inset 0 0 0 1.5px var(--accent)}
+table.words tbody tr{cursor:pointer}
+table.words tbody tr:hover{background:color-mix(in srgb,var(--ink) 3%,transparent)}
+button.wh{appearance:none;border:0;background:none;padding:0;margin:0;font:inherit;color:inherit;cursor:pointer;text-align:left;white-space:nowrap}
+button.wh:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.wpp{font-size:1rem;color:var(--muted);margin-top:8px;max-width:34ch;line-height:1.35}
+
+/* карточка слова */
+#wcard{width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto}
+.wc-body{padding:4px 20px 20px;display:flex;flex-direction:column;gap:12px}
+.wc-body h3{font-family:var(--f-head);font-size:18px;margin-top:4px}
+.wc-body h3 .meta{font-family:var(--f-body);font-weight:400}
+.wc-word{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+.wc-g{font-size:34px;line-height:1.15;font-weight:700}
+.wc-f{font-size:19px;color:var(--muted)}
+.wc-ru{font-size:17px;line-height:1.45}
+.facts{list-style:none;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.facts li{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14.5px}
+.facts li span{color:var(--muted)}
+.facts li b{font-weight:600;text-align:right}
+.wc-state{display:flex;align-items:center;gap:2px;font-size:14.5px;color:var(--muted)}
+.pp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+@media (min-width: 600px){ .pp-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+.pp-cell{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:7px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.pp-cell small{font-size:11.5px;color:var(--muted);line-height:1.2}
+.pp-cell .gr{font-size:18px;line-height:1.25;overflow-wrap:anywhere}
+.pp-cell.bold .gr,.pp-table td.bold{font-weight:700}
+.pp-cell.bold{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.pp-notes{list-style:none;display:flex;flex-direction:column;gap:6px;font-size:13.5px;line-height:1.45;color:var(--ink)}
+.pp-notes b{font-weight:600;color:var(--muted);margin-right:2px}
+.pp-notes .gr{font-size:1.1em}
+
+/* карточки основных форм: оборот прокручивается, если сносок много */
+.face.pback{justify-content:flex-start;align-items:stretch;text-align:left;overflow-y:auto;padding:18px 16px;gap:10px}
+.pb-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;padding-right:70px}
+.pb-head .gr{font-size:24px;font-weight:700}
+.pb-head .muted{font-size:14px}
+.face.pback .src{margin-top:auto;padding-top:6px}
+.trainer.wide{max-width:none}
+.scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.pp-table{min-width:760px}
+.pp-table th{white-space:nowrap}
+.pp-table td{font-size:17px;white-space:nowrap}
+.pp-table tbody tr{cursor:pointer}
+.pp-table tbody tr:hover{background:color-mix(in srgb,var(--ink) 3%,transparent)}
+.opts .btn.popt{display:flex;flex-direction:column;gap:2px;min-height:60px;font-family:var(--f-body)}
+.opts .btn.popt .gr{font-size:1.3rem;font-weight:400}
+.opts .btn.popt small{font-size:13px;color:var(--muted);font-weight:500}
+
+/* прогресс и профиль */
+.nt-line{font-size:16px;line-height:1.45}
+.nt-line b{font-family:var(--f-head);font-size:22px;color:var(--good)}
+.seg3.two{grid-template-columns:repeat(2,1fr)}
+.flabel{font-size:13.5px;font-weight:600;color:var(--muted)}

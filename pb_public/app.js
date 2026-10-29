@@ -5,19 +5,41 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* ---------- Справочники ---------- */
-// LETTERS (data/letters.js), WORDS и SPECIAL (data/words.js), PARTS и CHAPTERS (data/chapters.js) подключены отдельными файлами
+// LETTERS (data/letters.js), WORDS и SPECIAL (data/words.js), PARTS и CHAPTERS (data/chapters.js),
+// DICT (data/dictionary.js, словарь учебника) и VERBS (data/parts.js, основные формы) подключены отдельными файлами
 const INT = [0, 1, 3, 7, 14, 30, 60]; // интервалы повторения по ступеням 0–6, дней
-const NEW = 10;      // новых слов за сессию и в плане на день
-const QUIZ_N = 20;   // вопросов в тесте слов
+const NEW = 10;      // новых слов за сессию и в плане на день (и ещё до 10 добавленных вручную)
+const NEW_PARTS = 5; // новых глаголов основных форм в плане на день
+const QUIZ_N = 20;   // вопросов в тесте слов и основных форм
 const SURE = 4;      // с этой ступени (интервал от двух недель) слово «уверенно»
-const PBN = {words:'word_progress', letters:'letter_progress', plans:'plan_days'};
+const NT_WORDS = 138167; // слов в тексте Нового Завета (учебник, конец главы 8)
+const PBN = {words:'word_progress', letters:'letter_progress', plans:'plan_days', parts:'parts_progress', added:'word_added'};
 const KEYS = Object.keys(PBN);
-const FIELDS = {words:['n','level','due','hard'], letters:['n','known','hard'], plans:['date','tasks','done']};
-const MATCH = {words:'n', letters:'n', plans:'date'}; // по какому полю запись единственная у пользователя
-const WORD = new Map(WORDS.map(w => [w.n, w]));
-const CHS = [...new Set(WORDS.map(w => w.ch))];
+const FIELDS = {words:['n','level','due','hard'], letters:['n','known','hard'], plans:['date','tasks','done'], parts:['n','level','due','hard'], added:['n']};
+const MATCH = {words:'n', letters:'n', plans:'date', parts:'n', added:'n'}; // по какому полю запись единственная у пользователя
+// Все слова: лексический минимум (как в главах, номера 1–320) и остальные статьи словаря (номера с 321).
+// Частотность и часть речи у всех слов из словаря; d: статья словаря (у εἰ μή её нет)
+const DICTN = new Map(DICT.map(d => [d.n, d]));
+const POS_MIN = {n: 'n', v: 'v', a: 'a', x: 'q'};
+const MINW = WORDS.map(w => { const d = DICTN.get(w.n); return {...w, f: d ? d.f : w.f, k: d ? d.k : POS_MIN[w.k] || 'q', d: d || null, min: true}; });
+const LEX = MINW.concat(DICT.filter(d => d.n > 320).map(d => ({n: d.n, g: d.g, ru: d.ru, f: d.f, ch: d.ch, p: d.p, k: d.k, d, min: false})));
+const WORD = new Map(LEX.map(w => [w.n, w]));
+const BY_FREQ = LEX.slice().sort((a, b) => b.f - a.f || a.n - b.n);
+// Весь словарь в порядке книги; слово минимума без статьи (εἰ μή) стоит рядом по алфавиту
+let FULL = null;
+function fullList(){
+  if(FULL) return FULL;
+  const ord = s => norm(split(s)[0]);
+  FULL = DICT.map(d => WORD.get(d.n));
+  MINW.filter(w => !w.d).forEach(w => { const i = FULL.findIndex(x => ord(x.d.g) > ord(w.g)); FULL.splice(i < 0 ? FULL.length : i, 0, w); });
+  return FULL;
+}
+const VERB = new Map(VERBS.map(v => [v.n, v]));
+const VERB_OF = new Map(VERBS.map(v => [v.d, v])); // номер слова → глагол основных форм
+const VERBS_BY_FREQ = VERBS.slice().sort((a, b) => ((WORD.get(b.d) || {}).f || 0) - ((WORD.get(a.d) || {}).f || 0) || a.n - b.n);
+const CHS = [...new Set(MINW.map(w => w.ch))];
 const chapter = n => CHAPTERS.find(c => c.n === n);
-const chWords = ch => WORDS.filter(w => w.ch === ch);
+const chWords = ch => MINW.filter(w => w.ch === ch);
 
 /* ---------- Значки ---------- */
 const svg = (d, cls) => `<svg viewBox="0 0 24 24" aria-hidden="true"${cls ? ` class="${cls}"` : ''}>${d}</svg>`;
@@ -38,8 +60,8 @@ const ICON = {
 };
 
 /* ---------- Состояние ---------- */
-const S = {words:[], letters:[], plans:[], invites:[], loaded:false};
-const WP = new Map(), LP = new Map(); // прогресс по номеру слова и буквы
+const S = {words:[], letters:[], plans:[], parts:[], added:[], invites:[], loaded:false};
+const WP = new Map(), LP = new Map(), PP = new Map(), AD = new Map(); // прогресс по номеру слова, буквы и глагола; добавленные слова
 const loadLS = (k, d) => { try { const v = localStorage.getItem('gk_'+k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } };
 const saveLS = (k, v) => { try { localStorage.setItem('gk_'+k, JSON.stringify(v)); } catch(e){} };
 const UI = {hops:0, shown:'', day:'', folds: new Set()};
@@ -82,6 +104,7 @@ const weekStart = () => addDays(todayISO(), -monIndex(new Date())); // поне�
 const longDate = () => { const d = new Date(); return `${WDF[d.getDay()]}, ${d.getDate()} ${MONF[d.getMonth()]}`; };
 const fmtDay = iso => { if(!iso) return ''; const [y,m,d] = iso.split('-').map(Number); return d + ' ' + MONF[m-1] + (y !== new Date().getFullYear() ? ' ' + y : ''); };
 const plural = (n, f) => { n = Math.abs(n) % 100; const n1 = n % 10; if(n > 10 && n < 20) return f[2]; if(n1 > 1 && n1 < 5) return f[1]; if(n1 === 1) return f[0]; return f[2]; };
+const VERBS_F = ['глагол','глагола','глаголов'];
 const WORDS_F = ['слово','слова','слов'], CH_F = ['глава','главы','глав'], DAYS_F = ['день','дня','дней'], LET_F = ['буква','буквы','букв'];
 const shuffle = a => { a = [...a]; for(let i = a.length - 1; i > 0; i--){ const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 // «ἄγγελος, -ου, ὁ» → ['ἄγγελος', '-ου, ὁ']
@@ -103,12 +126,30 @@ const lettersKnown = () => LETTERS.filter(L => (lRec(L.n) || {}).known).length;
 const lettersHard = () => LETTERS.filter(L => (lRec(L.n) || {}).hard).length;
 function wordCounts(list){
   const c = {sure:0, learn:0, hard:0, new:0};
-  (list || WORDS).forEach(w => c[wState(w.n)]++);
+  (list || MINW).forEach(w => c[wState(w.n)]++);
   return c;
 }
+// Основные формы: те же состояния и тот же порядок повторения, прогресс в parts_progress
+const pRec = n => PP.get(n);
+function pState(n){ const r = pRec(n); if(!r) return 'new'; if(r.hard) return 'hard'; return (r.level || 0) >= SURE ? 'sure' : 'learn'; }
+const isPDue = n => { const r = pRec(n); return !!r && r.due <= today(); };
+const isAdded = n => AD.has(n);
+// Доля текста НЗ: сумма частотности выученных слов, делённая на число слов НЗ
+const coverage = () => LEX.reduce((a, w) => a + (isLearned(w.n) ? w.f : 0), 0);
 function reindex(key){
   if(key === 'words'){ WP.clear(); S.words.forEach(r => WP.set(r.n, r)); }
   if(key === 'letters'){ LP.clear(); S.letters.forEach(r => LP.set(r.n, r)); }
+  if(key === 'parts'){ PP.clear(); S.parts.forEach(r => PP.set(r.n, r)); }
+  if(key === 'added'){ AD.clear(); S.added.forEach(r => AD.set(r.n, r)); }
+}
+// Ответ «Знаю» или «Повторить» (ошибка в тесте): изменения записи прогресса слова или глагола.
+// «Знаю» новому или ошибочному в этой сессии: ступень 1 на завтра; со сроком: следующая ступень; «Повторить»: ступень 0, сегодня, трудное
+function srsPatch(s, failed, ok){
+  const t = today();
+  if(!ok) return {level: 0, due: t, hard: true};
+  if(!s || failed) return {level: 1, due: addDays(t, 1), hard: false};
+  if(s.due <= t){ const b = Math.min((s.level || 0) + 1, 6); return {level: b, due: addDays(t, INT[b]), hard: false}; }
+  return s.hard ? {hard: false} : null;
 }
 
 /* ---------- Главы: что пройдено ---------- */
@@ -204,7 +245,7 @@ function mergePlan(srv, mine){
 let cacheTimer = 0;
 function saveCache(){
   clearTimeout(cacheTimer);
-  cacheTimer = setTimeout(() => saveLS(cacheKey(), {words: S.words, letters: S.letters, plans: S.plans}), 300);
+  cacheTimer = setTimeout(() => saveLS(cacheKey(), Object.fromEntries(KEYS.map(k => [k, S[k]]))), 300);
 }
 function loadCache(){
   const c = loadLS(cacheKey(), null);
@@ -239,15 +280,39 @@ async function subscribeAll(){
 }
 const setWord = (n, patch) => saveRec('words', n, patch);
 const setLetter = (n, patch) => saveRec('letters', n, patch);
+const setPart = (n, patch) => saveRec('parts', n, patch);
 
 /* ---------- План на сегодня ---------- */
-// Задания: review: слова с подошедшим сроком, new: следующие 10 новых слов по порядку учебника,
+// Задания: review: слова с подошедшим сроком, new: следующие 10 новых слов (по главам или по частоте) и до 10 слов,
+// добавленных из словаря вручную, parts: 5 новых глаголов основных форм и глаголы со сроком,
 // alphabet: карточки трудных и ещё не выученных букв. План составляется при первом открытии дня и хранится в plan_days.
-const TASK_ORDER = ['review', 'new', 'alphabet'];
+const TASK_ORDER = ['review', 'new', 'parts', 'alphabet'];
 const todayPlan = () => S.plans.find(p => p.date === today());
+const planOrder = () => me().plan_order === 'freq' ? 'freq' : 'chapters';
+const partsOn = () => !me().parts_off;
+// Очередь новых слов: «по главам»: сначала минимум по порядку учебника, потом остальной словарь от частых слов к редким;
+// «по частоте»: весь словарь от частых к редким. Начатые слова пропускаются
+let ORDER = null;
+const orderList = k => { ORDER = ORDER || {chapters: MINW.concat(BY_FREQ.filter(w => !w.min)), freq: BY_FREQ}; return ORDER[k]; };
+const addedWaiting = () => S.added.slice().sort((a, b) => String(a.created).localeCompare(String(b.created))).map(r => WORD.get(r.n)).filter(w => w && !wRec(w.n));
+function nextNew(){
+  const mine = addedWaiting().slice(0, NEW);
+  const next = orderList(planOrder()).filter(w => !wRec(w.n) && !mine.includes(w)).slice(0, NEW);
+  return next.concat(mine).map(w => w.n);
+}
+function partsTask(){
+  if(!partsOn()) return null;
+  const verbs = VERBS_BY_FREQ.filter(v => !pRec(v.n)).slice(0, NEW_PARTS).map(v => v.n);
+  const due = VERBS.filter(v => isPDue(v.n)).length;
+  return verbs.length || due ? {key: 'parts', verbs, count: due, done: false} : null;
+}
 function taskDeck(t){
-  if(t.key === 'review') return WORDS.filter(w => isDue(w.n));
+  if(t.key === 'review') return LEX.filter(w => isDue(w.n));
   if(t.key === 'new') return (t.words || []).map(n => WORD.get(n)).filter(w => w && (!wRec(w.n) || isDue(w.n)));
+  if(t.key === 'parts'){
+    const fresh = (t.verbs || []).map(n => VERB.get(n)).filter(v => v && !pRec(v.n));
+    return VERBS.filter(v => isPDue(v.n)).concat(fresh);
+  }
   if(t.key === 'alphabet') return LETTERS.filter(L => { const r = lRec(L.n); return !r || !r.known || r.hard; });
   return [];
 }
@@ -255,21 +320,49 @@ function buildPlan(){
   const tasks = [];
   const due = taskDeck({key: 'review'}).length;
   if(due) tasks.push({key: 'review', count: due, done: false});
-  const next = WORDS.filter(w => !wRec(w.n)).slice(0, NEW).map(w => w.n);
+  const next = nextNew();
   if(next.length) tasks.push({key: 'new', words: next, done: false});
+  const pt = partsTask();
+  if(pt) tasks.push(pt);
   const abc = taskDeck({key: 'alphabet'}).length;
   if(abc) tasks.push({key: 'alphabet', count: abc, done: false});
   return tasks;
 }
-// Составить план на сегодня, если его ещё нет; отметить задания, которые уже нечего делать
+// Составить план на сегодня, если его ещё нет; отметить задания, которые уже нечего делать.
+// Невыполненный план, составленный до этапа 2, получает задание основных форм, если для него есть глаголы
 function checkPlan(){
   if(!UI.ready || !pb.authStore.isValid) return;
   const p = todayPlan();
   if(!p){ const tasks = buildPlan(); saveRec('plans', today(), {tasks, done: tasks.length === 0}); return; }
-  if((p.tasks || []).some(t => !t.done && !taskDeck(t).length)){
-    const tasks = p.tasks.map(t => !t.done && !taskDeck(t).length ? {...t, done: true} : t);
-    saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
+  let tasks = p.tasks || [], changed = false;
+  if(!p.done && !tasks.some(t => t.key === 'parts')){ const pt = partsTask(); if(pt){ tasks = tasks.concat(pt); changed = true; } }
+  if(tasks.some(t => !t.done && !taskDeck(t).length)){ tasks = tasks.map(t => !t.done && !taskDeck(t).length ? {...t, done: true} : t); changed = true; }
+  if(changed) saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
+}
+// Настройки плана поменялись: новые слова и основные формы на сегодня пересобираются, если задание ещё не начато
+function replanToday(){
+  const p = todayPlan(); if(!p) return;
+  let tasks = (p.tasks || []).slice();
+  const i = tasks.findIndex(t => t.key === 'new');
+  if(i < 0 || (!tasks[i].done && !(tasks[i].words || []).some(n => wRec(n)))){
+    const next = nextNew();
+    if(i >= 0) tasks.splice(i, 1);
+    if(next.length) tasks.push({key: 'new', words: next, done: false});
   }
+  const j = tasks.findIndex(t => t.key === 'parts');
+  if(!partsOn() && j >= 0 && !tasks[j].done) tasks.splice(j, 1);
+  if(partsOn() && j < 0){ const pt = partsTask(); if(pt) tasks.push(pt); }
+  saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
+}
+// Слово из словаря добавлено в изучение: попадает в новые слова сегодняшнего плана, если задание ещё не выполнено
+function addToStudy(n){
+  if(wRec(n) || isAdded(n)) return 'already';
+  saveRec('added', n, {});
+  const p = todayPlan(), t = p && (p.tasks || []).find(x => x.key === 'new');
+  if(t && t.done) return 'tomorrow';
+  const tasks = (p ? p.tasks || [] : []).filter(x => x.key !== 'new').concat({...(t || {key: 'new', done: false}), words: ((t && t.words) || []).filter(x => x !== n).concat(n)});
+  if(p) saveRec('plans', today(), {tasks, done: false});
+  return 'today';
 }
 function markTask(key, count){
   const p = todayPlan(); if(!p) return;
@@ -277,15 +370,25 @@ function markTask(key, count){
   saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
 }
 const nextTask = () => { const p = todayPlan(); return p && (p.tasks || []).find(t => !t.done); };
-function chRange(ns){
-  const chs = [...new Set(ns.map(n => (WORD.get(n) || {}).ch).filter(Boolean))];
-  if(!chs.length) return '';
+function chRange(ws){
+  const chs = [...new Set(ws.map(w => w.ch))].sort((a, b) => a - b);
   return chs.length === 1 ? `глава ${chs[0]}` : `главы ${chs[0]}–${chs[chs.length - 1]}`;
 }
+// Подпись задания «Новые слова»: главы, если слова идут по порядку учебника; иначе откуда слова
+function newInfo(ns){
+  const ws = ns.map(n => WORD.get(n)).filter(Boolean), my = ws.filter(w => isAdded(w.n)), rest = ws.filter(w => !isAdded(w.n));
+  const freq = planOrder() === 'freq';
+  const range = !freq && rest.length && rest.every(w => w.min) ? chRange(rest) : '';
+  const sub = [];
+  if(rest.length && !range) sub.push(freq ? 'по частоте' : 'из словаря, от частых к редким');
+  if(my.length) sub.push(`добавленные вами: ${my.length}`);
+  return {range, sub: sub.join(', ')};
+}
 function taskInfo(t){
-  const n = t.done ? (t.count || (t.words || []).length) : t.key === 'new' ? (t.words || []).length : taskDeck(t).length;
+  const n = t.done ? (t.count || (t.words || []).length || (t.verbs || []).length) : t.key === 'new' ? (t.words || []).length : taskDeck(t).length;
   if(t.key === 'review') return {title: `Слова к повторению · ${n}`, min: Math.max(1, Math.ceil(n * 8 / 60)), href: '#/task/review'};
-  if(t.key === 'new') return {title: `Новые слова, ${chRange(t.words || [])} · ${n}`, min: Math.max(2, Math.ceil(n * 25 / 60)), href: '#/task/new'};
+  if(t.key === 'new'){ const r = newInfo(t.words || []); return {title: `Новые слова${r.range ? ', ' + r.range : ''} · ${n}`, sub: r.sub, min: Math.max(2, Math.ceil(n * 25 / 60)), href: '#/task/new'}; }
+  if(t.key === 'parts'){ const fresh = (t.verbs || []).filter(x => !pRec(x)).length; return {title: `Основные формы · ${n}`, sub: t.done ? '' : [fresh ? `новых глаголов: ${fresh}` : '', n - fresh > 0 ? `повторить: ${n - fresh}` : ''].filter(Boolean).join(', '), min: Math.max(2, Math.ceil(n * 20 / 60)), href: '#/task/parts'}; }
   return {title: 'Алфавит', sub: `трудные и невыученные: ${n} ${plural(n, LET_F)}`, min: Math.max(2, Math.ceil(n * 8 / 60)), href: '#/task/alphabet'};
 }
 // День в календаре: full: план выполнен полностью, half: сделано хотя бы одно задание, '': занятий не было
@@ -371,7 +474,8 @@ $('#update-close').addEventListener('click', () => { $('#update-bar').hidden = t
 function showNotice(text){ $('#notice-text').textContent = text; $('#notice').hidden = false; }
 
 /* ---------- Адреса экранов: #/ сегодня, #/task/КЛЮЧ задание плана, #/course, #/ch/N глава, #/abc алфавит,
-   #/dict словарь, #/words?r=ДИАПАЗОН&m=quiz карточки и тест слов, #/progress, #/profile ---------- */
+   #/dict словарь, #/words?r=НАБОР&m=quiz карточки и тест слов, #/parts?m=cards|quiz|table&v=N основные формы,
+   #/progress, #/profile ---------- */
 function route(){
   const h = location.hash.replace(/^#\/?/, '');
   const [path, q] = h.split('?');
@@ -388,9 +492,10 @@ const VIEWS = {
   home: {f: vHome}, task: {f: vTask, init: initTask, still: true},
   course: {f: vCourse}, ch: {f: vChapter}, abc: {f: vAbc, init: initAbc, still: true},
   dict: {f: vDict, init: initDict, still: true}, words: {f: vWords, init: initWords, still: true},
+  parts: {f: vParts, init: initParts, still: true},
   progress: {f: vProgress}, profile: {f: vProfile},
 };
-const TAB = {home:'today', task:'today', course:'course', ch:'course', abc:'course', dict:'dict', words:'dict', progress:'progress'};
+const TAB = {home:'today', task:'today', course:'course', ch:'course', abc:'course', parts:'course', dict:'dict', words:'dict', progress:'progress'};
 let raf = 0;
 function schedule(){ if(raf) return; raf = requestAnimationFrame(() => { raf = 0; render(); }); }
 function render(force){
@@ -436,13 +541,14 @@ function vHome(){
   return `${head('Сегодня', longDate())}<div class="cols"><div class="col">${planCard}</div><div class="col">${chapterCard()}</div></div>`;
 }
 function chapterCard(){
-  const c = currentChapter(), passed = passedCount(), learned = WORDS.filter(w => isLearned(w.n)).length;
+  const c = currentChapter(), passed = passedCount(), learned = MINW.filter(w => isLearned(w.n)).length;
   const href = c.n === 3 ? '#/abc' : '#/ch/' + c.n;
   return `<section class="card chap-card">
     <span class="kicker">Сейчас</span>
     <a class="chap-link" href="${href}"><h2>Глава ${c.n}</h2><span>${esc(c.t)}</span></a>
     <div class="meter"><div class="meter-t"><span>Курс</span><b>${passed} ${plural(passed, CH_F)} из ${CHAPTERS.length}</b></div>${bar(passed, CHAPTERS.length)}</div>
-    <div class="meter"><div class="meter-t"><span>Слова минимума</span><b>${learned} из ${WORDS.length}</b></div>${bar(learned, WORDS.length, 'good')}</div>
+    <div class="meter"><div class="meter-t"><span>Слова минимума</span><b>${learned} из ${MINW.length}</b></div>${bar(learned, MINW.length, 'good')}</div>
+    <div class="meter"><div class="meter-t"><span>Текст Нового Завета</span><b>${pctNT()}</b></div>${bar(coverage(), NT_WORDS, 'good')}</div>
   </section>`;
 }
 
@@ -452,12 +558,13 @@ function vTask(r){
   if(!t) return `${subHead('#/', 'Сегодня', 'Задание')}<section class="card"><p>Этого задания сегодня нет в плане.</p><a class="btn" href="#/">К плану</a></section>`;
   const i = taskInfo(t);
   if(t.key === 'alphabet') return `${subHead('#/', 'Сегодня', 'Алфавит', 'Карточки трудных и ещё не выученных букв')}<div class="trainer">${abcCardsHTML(true)}</div>`;
-  return `${subHead('#/', 'Сегодня', esc(i.title.replace(/ · \d+$/, '')), t.key === 'new' ? 'Новые слова по порядку учебника' : 'Слова, у которых подошёл срок повторения')}<div class="trainer">${wCardsHTML(true)}</div>`;
+  if(t.key === 'parts') return `${subHead('#/', 'Сегодня', 'Основные формы', 'Новые глаголы и глаголы, у которых подошёл срок повторения')}<div class="trainer">${pCardsHTML(true)}</div>`;
+  return `${subHead('#/', 'Сегодня', esc(i.title.replace(/ · \d+$/, '')), t.key === 'new' ? (i.sub ? 'Новые слова ' + esc(i.sub) : 'Новые слова по порядку учебника') : 'Слова, у которых подошёл срок повторения')}<div class="trainer">${wCardsHTML(true)}</div>`;
 }
 function initTask(r){
   const p = todayPlan(), t = p && (p.tasks || []).find(x => x.key === r.id);
   if(!t) return;
-  if(t.key === 'alphabet') startAbcCards(t); else startWCards(t);
+  if(t.key === 'alphabet') startAbcCards(t); else if(t.key === 'parts') startPCards(t); else startWCards(t);
 }
 // Экран «задание выполнено» и переход к следующему
 function taskDoneHTML(text){
@@ -480,7 +587,8 @@ function vCourse(){
   return `${head('Курс', `Маунс, «Основы библейского греческого языка» · пройдено ${passed} из ${CHAPTERS.length}`)}
     <div class="parts">${PARTS.map(p => `<section class="card part"><h2><span>Часть ${p.n}</span>${esc(p.t)}</h2>
       <div class="ch-list">${CHAPTERS.filter(c => c.n >= p.from && c.n <= p.to).map(chapterRow).join('')}</div></section>`).join('')}</div>
-    <p class="hint">Сейчас в главах есть алфавит (глава 3) и слова лексического минимума. Объяснения, таблицы окончаний и упражнения из рабочей тетради появятся позже.</p>`;
+    ${partsCard()}
+    <p class="hint">Сейчас в главах есть алфавит (глава 3), слова лексического минимума и основные формы глаголов (с главы 20). Объяснения, таблицы окончаний и упражнения из рабочей тетради появятся позже.</p>`;
 }
 function vChapter(r){
   const c = chapter(Number(r.id));
@@ -490,66 +598,207 @@ function vChapter(r){
       <div class="row"><a class="btn primary" href="#/words?r=c:${c.n}">${ICON.cards}Карточки</a><a class="btn" href="#/words?r=c:${c.n}&m=quiz">${ICON.quiz}Тест</a></div></section>`
     : `<section class="card"><p class="lead">В этой главе нет слов лексического минимума.</p></section>`;
   return `${subHead('#/course', 'Курс', `Глава ${c.n}. ${esc(c.t)}`, `Учебник, с. ${c.p}`)}
-    <div class="cols"><div class="col">${words}
+    <div class="cols"><div class="col">${words}${c.n >= 20 ? partsCard() : ''}
       <p class="hint">Остальное содержимое главы (объяснения, таблицы, упражнения из рабочей тетради) появится позже.</p></div>
     <div class="col">${ws.length ? `<section class="card flat">${wordTable(ws)}</section>` : ''}</div></div>`;
 }
 
+// Карточка «Основные формы глаголов» в курсе и в главах с 20-й
+function partsCard(){
+  const st = VERBS.filter(v => pRec(v.n)).length, due = VERBS.filter(v => isPDue(v.n)).length;
+  return `<section class="card parts-card"><div class="plan-top"><h2>Основные формы глаголов</h2><span class="muted">начато ${st} из ${VERBS.length}</span></div>
+    <p class="lead">${VERBS.length} глаголов, которые встречаются в Новом Завете 50 раз и больше: шесть форм и пояснения из сносок (с. 412–421).${due ? ` К повторению: ${due}.` : ''}</p>
+    ${bar(st, VERBS.length, 'good')}
+    <div class="row"><a class="btn primary" href="#/parts">${ICON.cards}Карточки</a><a class="btn" href="#/parts?m=quiz">${ICON.quiz}Тест</a><a class="btn" href="#/parts?m=table">${ICON.table}Таблица</a></div></section>`;
+}
+
 /* ---------- Словарь ---------- */
 const DOT = {sure: 'k', learn: 's', hard: 'h', new: ''};
-function wordTable(list){
-  return `<table class="words"><thead><tr><th>Слово</th><th>Перевод</th><th class="r">НЗ</th></tr></thead><tbody>${list.map(w => { const [h, f] = split(w.g);
-    return `<tr><td class="wgt"><span class="wh"><span class="dot ${DOT[wState(w.n)]}"></span>${h}</span>${f ? `<div class="wforms">${f}</div>` : ''}</td><td>${esc(w.ru)}</td><td class="fr">${w.f.toLocaleString('ru-RU')}</td></tr>`; }).join('')}</tbody></table>`;
+const POS = [['n', 'Существительные'], ['v', 'Глаголы'], ['a', 'Прилагательные и местоимения'], ['d', 'Наречия'], ['p', 'Предлоги'], ['c', 'Союзы'], ['q', 'Частицы и другие']];
+const FREQS = [500, 100, 50, 25, 10];
+const dotOf = w => `<span class="dot ${DOT[wState(w.n)] || (isAdded(w.n) ? 'a' : '')}"></span>`;
+// art: в полном словаре статья книги, в минимуме слово как в главе
+function wordTable(list, art){
+  return `<table class="words"><thead><tr><th>Слово</th><th>Перевод</th><th class="r">НЗ</th></tr></thead><tbody>${list.map(w => { const a = art && w.d ? w.d : w, [h, f] = split(a.g);
+    return `<tr data-w="${w.n}"><td class="wgt"><button type="button" class="wh" data-w="${w.n}">${dotOf(w)}${esc(h)}</button>${f ? `<div class="wforms">${esc(f)}</div>` : ''}</td><td>${esc(a.ru)}</td><td class="fr">${w.f.toLocaleString('ru-RU')}</td></tr>`; }).join('')}</tbody></table>`;
 }
+const DICT_UI = () => ({mode: loadLS('dict_mode', 'min') === 'all' ? 'all' : 'min', q: loadLS('dict_q', ''), ch: loadLS('dict_ch', 'all'), f: loadLS('dict_f', 'all'), k: loadLS('dict_k', 'all')});
 function vDict(){
-  const q = loadLS('dict_q', ''), c = loadLS('dict_ch', 'all');
-  return `${head('Словарь', `Лексический минимум, главы 4–36 · ${WORDS.length} слов`)}
+  const u = DICT_UI(), all = u.mode === 'all';
+  const opt = (v, l, cur) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${l}</option>`;
+  const n = all ? fullList().length : MINW.length;
+  return `${head('Словарь', `${all ? 'Словарь учебника, с. 437–461' : 'Лексический минимум, главы 4–36'} · ${n} ${plural(n, WORDS_F)}`)}
     <div class="cols"><div class="col">
       <div class="dict-tools">
-        <input class="inp" id="d-q" type="search" placeholder="Поиск по-гречески или по-русски" autocomplete="off" value="${esc(q)}">
-        <select class="inp" id="d-ch" aria-label="Глава"><option value="all">Все главы</option>${CHS.map(n => `<option value="${n}"${String(n) === String(c) ? ' selected' : ''}>Глава ${n}</option>`).join('')}</select>
-        <div class="row"><a class="btn primary" id="d-cards" href="#/words">${ICON.cards}Карточки</a><a class="btn" id="d-quiz" href="#/words?m=quiz">${ICON.quiz}Тест</a></div>
+        ${seg('dmode', [['min', `Минимум (${MINW.length})`], ['all', 'Весь словарь']], u.mode, 'Какие слова показывать')}
+        <input class="inp" id="d-q" type="search" placeholder="Поиск по-гречески или по-русски" autocomplete="off" value="${esc(u.q)}">
+        <div class="filters">
+          <select class="inp" id="d-ch" aria-label="Глава">${opt('all', 'Все главы', u.ch)}${CHS.map(n => opt(n, 'Глава ' + n, u.ch)).join('')}</select>
+          <select class="inp" id="d-f" aria-label="Частота в Новом Завете">${opt('all', 'Любая частота', u.f)}${FREQS.map(x => opt(x, x + ' раз и больше', u.f)).join('')}</select>
+          <select class="inp" id="d-k" aria-label="Часть речи">${opt('all', 'Все части речи', u.k)}${POS.map(([k, l]) => opt(k, l, u.k)).join('')}</select>
+        </div>
+        <div class="row"><a class="btn primary" id="d-cards" href="#/words">${ICON.cards}Карточки</a><a class="btn" id="d-quiz" href="#/words?m=quiz">${ICON.quiz}Тест</a><a class="btn" href="#/parts">${ICON.table}Основные формы</a></div>
       </div>
       <p class="meta" id="d-count"></p>
       <div id="d-list"></div>
     </div><div class="col">
+      <section class="card rules"><h3>Точки и частота</h3><ul>
+        <li><span class="dot k"></span>уверенно (интервал от двух недель), <span class="dot s"></span>в изучении, <span class="dot h"></span>трудное, <span class="dot a"></span>добавлено, ждёт в новых словах.</li>
+        <li>НЗ: сколько раз слово встречается в Новом Завете, по словарю учебника.</li>
+        <li>Нажмите на слово, чтобы открыть его статью: значение, глава, код MBG, временные формы. Слово не из минимума можно добавить в изучение, тогда оно попадёт в новые слова плана.</li>
+      </ul></section>
       <section class="card rules"><h3>Особые формы</h3><ul>${SPECIAL.map(s => `<li><span class="gr">${s.g}</span>: ${esc(s.ru)}. В НЗ ${times(s.f)}, гл. ${s.ch}, с. ${s.p}.</li>`).join('')}</ul>
         <p class="src">Маунс даёт их в лексическом минимуме отдельно, в счёт 320 слов они не входят.</p></section>
       <section class="card rules"><h3>Как работает повторение</h3><ul>
-        <li>За одну сессию добавляется 10 новых слов, по порядку учебника.</li>
+        <li>За одну сессию добавляется 10 новых слов.</li>
         <li>«Знаю» отодвигает слово дальше: через 1, 3, 7, 14, 30 и 60 дней.</li>
         <li>«Повторить» возвращает слово через три карточки и сбрасывает интервал. Ошибки в тесте тоже сбрасывают его.</li>
-        <li>Точки в словаре: <span class="dot k"></span>уверенно (интервал от двух недель), <span class="dot s"></span>в изучении, <span class="dot h"></span>трудное.</li>
-        <li>Частотность: сколько раз слово встречается в Новом Завете, по лексическому минимуму главы.</li>
       </ul></section>
     </div></div>`;
 }
+// Буква, с которой начинается слово (без придыханий и ударений), для заголовков полного словаря
+const firstLetter = g => (norm(g).replace(/[^α-ω]/g, '')[0] || '').toUpperCase();
+function dictFilter(u){
+  const q = norm(u.q.trim());
+  const base = u.mode === 'all' ? fullList() : MINW;
+  return base.filter(w => (u.ch === 'all' || w.ch === +u.ch) && (u.f === 'all' || w.f >= +u.f) && (u.k === 'all' || w.k === u.k)
+    && (!q || norm(w.g).includes(q) || norm(w.ru).includes(q) || (w.d && (norm(w.d.g).includes(q) || norm(w.d.ru).includes(q)))));
+}
 function initDict(){
+  let timer = 0;
   const upd = () => {
-    const q = norm($('#d-q').value.trim()), c = $('#d-ch').value;
-    saveLS('dict_q', $('#d-q').value); saveLS('dict_ch', c);
-    const list = WORDS.filter(w => (c === 'all' || w.ch === +c) && (!q || norm(w.g).includes(q) || norm(w.ru).includes(q)));
+    const u = {mode: DICT_UI().mode, q: $('#d-q').value, ch: $('#d-ch').value, f: $('#d-f').value, k: $('#d-k').value};
+    saveLS('dict_q', u.q); saveLS('dict_ch', u.ch); saveLS('dict_f', u.f); saveLS('dict_k', u.k);
+    const list = dictFilter(u), all = u.mode === 'all';
     $('#d-count').textContent = list.length ? `Найдено слов: ${list.length}` : 'Ничего не найдено';
-    $('#d-list').innerHTML = CHS.map(ch => { const ws = list.filter(w => w.ch === ch); if(!ws.length) return '';
+    let html;
+    if(!all) html = CHS.map(ch => { const ws = list.filter(w => w.ch === ch); if(!ws.length) return '';
       const ps = ws.map(w => w.p), pg = Math.min(...ps) === Math.max(...ps) ? `с. ${ps[0]}` : `с. ${Math.min(...ps)}–${Math.max(...ps)}`;
       return `<h3 class="chh">Глава ${ch} <span class="meta">${pg}</span></h3><section class="card flat">${wordTable(ws)}</section>`; }).join('');
-    const r = c === 'all' ? 'all' : 'c:' + c;
+    else { const groups = []; list.forEach(w => { const L = firstLetter(w.d ? w.d.g : w.g), g = groups[groups.length - 1]; if(g && g.L === L) g.ws.push(w); else groups.push({L, ws: [w]}); });
+      html = groups.map(g => `<h3 class="chh">${esc(g.L)} <span class="meta">${g.ws.length} ${plural(g.ws.length, WORDS_F)}</span></h3><section class="card flat">${wordTable(g.ws, true)}</section>`).join(''); }
+    $('#d-list').innerHTML = html;
+    // карточки и тест по выбранному: глава, частота или весь набор
+    const r = u.ch !== 'all' ? 'c:' + u.ch : u.f !== 'all' ? 'f:' + u.f : all ? 'f:10' : 'all';
     $('#d-cards').href = '#/words?r=' + r; $('#d-quiz').href = '#/words?r=' + r + '&m=quiz';
   };
-  $('#d-q').oninput = upd; $('#d-ch').onchange = upd;
+  $('#d-q').oninput = () => { clearTimeout(timer); timer = setTimeout(upd, 150); };
+  $('#d-ch').onchange = upd; $('#d-f').onchange = upd; $('#d-k').onchange = upd;
+  $$('[data-dmode]').forEach(b => b.onclick = () => { saveLS('dict_mode', b.dataset.dmode); render(true); });
+  $('#d-list').onclick = e => { const t = e.target.closest('[data-w]'); if(t) openWord(+t.dataset.w); };
   upd();
 }
 
+/* ---------- Карточка слова: статья словаря, основные формы, «Добавить в изучение» ---------- */
+const PP_LABELS = ['Настоящее время', 'Будущее время', 'Аорист действ. залога', 'Перфект действ. залога', 'Перфект ср./страд. залога', 'Аорист страд. залога'];
+const PP_SHORT = ['наст.', 'буд.', 'аорист', 'перфект', 'перфект ср./страд.', 'аорист страд.'];
+const POS_RU = {n: 'существительное', v: 'глагол', a: 'прилагательное или местоимение', d: 'наречие', p: 'предлог', c: 'союз', q: 'частица'};
+const MBG = {n: 'существительное', a: 'прилагательное', v: 'глагол', cv: 'составной глагол'};
+const DECL = {'1': 'первое склонение', '2': 'второе склонение', '3': 'третье склонение'};
+// «n-2a» → «существительное, второе склонение»
+function codeText(c){
+  const m = String(c || '').match(/^(cv|n|a|v)-(\d)/);
+  if(!m) return '';
+  if(m[1] === 'n') return MBG.n + (DECL[m[2]] ? ', ' + DECL[m[2]] : '');
+  return MBG[m[1]];
+}
+const fmtForm = f => esc(f).replace(/ или /g, ' <span class="muted">или</span> ');
+function partsBlock(v){
+  return `<div class="pp-grid">${[v.v].concat(v.f).map((f, i) => `<div class="pp-cell${(v.b || []).includes(i) ? ' bold' : ''}"><small>${PP_LABELS[i]}</small><span class="gr">${esc(f)}</span></div>`).join('')}</div>
+    ${Object.keys(v.fn || {}).length ? `<ul class="pp-notes">${Object.entries(v.fn).map(([i, t]) => `<li><b>${PP_SHORT[+i]}</b> <span class="gr">${esc(+i ? v.f[i - 1] : v.v)}</span>: ${esc(t)}</li>`).join('')}</ul>` : ''}`;
+}
+function stateText(n){
+  const r = wRec(n);
+  if(!r) return isAdded(n) ? 'Добавлено в изучение: ждёт в новых словах плана.' : 'Ещё не начато.';
+  const st = {hard: 'трудное', sure: 'уверенно', learn: 'в изучении'}[wState(n)];
+  return `${st[0].toUpperCase() + st.slice(1)}, следующее повторение ${r.due <= today() ? 'сегодня' : fmtDay(r.due)}.`;
+}
+function wordCardHTML(w){
+  const d = w.d, a = d || w, [h, rest] = split(a.g), v = VERB_OF.get(w.n);
+  const facts = [`<li><span>В Новом Завете</span><b>${times(w.f)}</b></li>`,
+    `<li><span>Лексический минимум</span><b>${w.min ? `глава ${w.ch}, с. ${w.p}` : 'не входит'}</b></li>`];
+  if(d && d.c) facts.push(`<li><span>Код MBG</span><b>${esc(d.c)}${codeText(d.c) ? ` <span class="muted">(${codeText(d.c)})</span>` : ''}</b></li>`);
+  else facts.push(`<li><span>Часть речи</span><b>${POS_RU[w.k] || ''}</b></li>`);
+  facts.push(`<li><span>Учебник</span><b>${d ? `словарь, с. ${d.p}` : 'только в лексическом минимуме'}</b></li>`);
+  const forms = d && (d.pp || d.im) ? `<h3>Временные формы в словаре</h3><div class="pp-grid">${[['Имперфект', d.im]].concat((d.pp || []).map((f, i) => [PP_LABELS[i + 1], f])).filter(x => x[1]).map(([l, f]) => `<div class="pp-cell"><small>${l}</small><span class="gr">${fmtForm(f)}</span></div>`).join('')}</div>` : '';
+  const chapterForm = w.min && d && (w.g.replace(/-/g, '–') !== d.g || w.ru !== d.ru) ? `<p class="hint">В главе ${w.ch}: <span class="gr">${esc(w.g)}</span>, ${esc(w.ru)}.</p>` : '';
+  let action = '';
+  if(!w.min && !wRec(w.n) && !isAdded(w.n)) action = `<button type="button" class="btn primary wide" data-wc="add" data-n="${w.n}">Добавить в изучение</button>`;
+  else if(w.min && !wRec(w.n)) action = `<p class="hint">Слово лексического минимума: придёт в новых словах плана.</p>`;
+  return `<div class="dlg-head"><h2>Слово</h2><button type="button" class="icon-btn" data-wc="close" aria-label="Закрыть">×</button></div>
+    <div class="wc-body">
+      <div class="wc-word"><span class="gr wc-g">${esc(h)}</span>${rest ? `<span class="gr wc-f">${esc(rest)}</span>` : ''}</div>
+      <p class="wc-ru">${esc(a.ru)}</p>${d && d.note ? `<p class="hint">${esc(d.note)}</p>` : ''}
+      ${chapterForm}
+      <ul class="facts">${facts.join('')}</ul>
+      ${forms}
+      ${v ? `<h3>Основные формы <span class="meta">учебник, с. ${v.p}</span></h3>${partsBlock(v)}<a class="btn sm" href="#/parts?v=${v.n}" data-wc="close-go">Карточки основных форм</a>` : ''}
+      <p class="wc-state"><span class="dot ${DOT[wState(w.n)] || (isAdded(w.n) ? 'a' : '')}"></span>${stateText(w.n)}</p>
+      ${action}
+    </div>`;
+}
+const wcDlg = $('#wcard');
+let wcGo = '';  // адрес, куда перейти после закрытия карточки (после шага «назад» в истории)
+function openWord(n){
+  const w = WORD.get(n); if(!w) return;
+  wcDlg.dataset.n = n;
+  wcDlg.innerHTML = wordCardHTML(w);
+  if(!wcDlg.open){ wcDlg.showModal(); history.pushState({wc: 1}, ''); }
+  wcDlg.scrollTop = 0;
+}
+wcDlg.addEventListener('close', () => {
+  if(history.state && history.state.wc) history.back();
+  else if(wcGo){ const h = wcGo; wcGo = ''; go(h); }
+});
+window.addEventListener('popstate', () => {
+  if(wcDlg.open) wcDlg.close();
+  else if(wcGo){ const h = wcGo; wcGo = ''; go(h); }
+});
+wcDlg.addEventListener('click', e => {
+  if(e.target === wcDlg){ wcDlg.close(); return; }
+  const b = e.target.closest('[data-wc]'); if(!b) return;
+  if(b.dataset.wc === 'close'){ wcDlg.close(); return; }
+  if(b.dataset.wc === 'close-go'){ e.preventDefault(); wcGo = b.getAttribute('href'); wcDlg.close(); return; }
+  if(b.dataset.wc === 'add'){
+    const res = addToStudy(+b.dataset.n);
+    toast(res === 'tomorrow' ? 'Слово добавлено: появится в новых словах завтра' : 'Слово добавлено в новые слова плана');
+    openWord(+b.dataset.n);
+    if(route().name === 'dict') $$(`#d-list [data-w="${b.dataset.n}"] .dot`).forEach(el => { el.className = 'dot a'; });
+  }
+});
+
 /* ---------- Карточки и тест слов (как в старом приложении) ---------- */
-// Диапазон: all: все главы, c:N: одна глава, u:N: с начала по главу N
-const WS = {range: loadLS('range', 'all'), dir: 'g', set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false};
-const inRange = w => { if(WS.range === 'all') return true; const [t, c] = WS.range.split(':'); return t === 'c' ? w.ch === +c : w.ch <= +c; };
-const rangeWords = () => WORDS.filter(inRange);
+// Набор: all: минимум, все главы; c:N: одна глава; u:N: с начала по главу N;
+// f:X: весь словарь, слова с частотностью от X (от частых к редким); my: добавленные из словаря вручную
+const RANGE_RE = /^(all|my|[cu]:\d+|f:(500|100|50|25|10))$/;
+const WS = {range: RANGE_RE.test(loadLS('range', 'all')) ? loadLS('range', 'all') : 'all', dir: 'g', set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false};
+const myWords = () => S.added.slice().sort((a, b) => String(a.created).localeCompare(String(b.created))).map(r => WORD.get(r.n)).filter(Boolean);
+function rangeWords(r){
+  r = r || WS.range;
+  if(r === 'all') return MINW;
+  if(r === 'my') return myWords();
+  const [t, x] = r.split(':');
+  if(t === 'c') return MINW.filter(w => w.ch === +x);
+  if(t === 'u') return MINW.filter(w => w.ch <= +x);
+  if(t === 'f') return BY_FREQ.filter(w => w.f >= +x);
+  return MINW;
+}
+function rangeTitle(r){
+  r = r || WS.range;
+  if(r === 'all') return 'Лексический минимум, главы 4–36';
+  if(r === 'my') return 'Слова, добавленные из словаря';
+  const [t, x] = r.split(':');
+  if(t === 'c') return `Лексический минимум, глава ${x}`;
+  if(t === 'u') return `Лексический минимум, главы 4–${x}`;
+  return `Весь словарь: ${x} раз и больше в Новом Завете`;
+}
 function rangeOptions(){
-  const cnt = c => chWords(c).length, upto = c => WORDS.filter(w => w.ch <= c).length;
-  return `<option value="all">Все главы · ${WORDS.length} слов</option>
-    <optgroup label="Одна глава">${CHS.map(c => `<option value="c:${c}">Глава ${c} · ${cnt(c)} сл.</option>`).join('')}</optgroup>
-    <optgroup label="С начала по главу">${CHS.slice(1).map(c => `<option value="u:${c}">Главы 4–${c} · ${upto(c)} сл.</option>`).join('')}</optgroup>`;
+  const cnt = c => chWords(c).length, upto = c => MINW.filter(w => w.ch <= c).length;
+  return `<optgroup label="По главам"><option value="all">Все главы · ${MINW.length} слов</option>
+    ${CHS.map(c => `<option value="c:${c}">Глава ${c} · ${cnt(c)} сл.</option>`).join('')}
+    ${CHS.slice(1).map(c => `<option value="u:${c}">Главы 4–${c} · ${upto(c)} сл.</option>`).join('')}</optgroup>
+    <optgroup label="По частоте в Новом Завете">${FREQS.map(x => `<option value="f:${x}">${x} раз и больше · ${rangeWords('f:' + x).length} сл.</option>`).join('')}</optgroup>
+    <optgroup label="Мои"><option value="my">Мои добавленные · ${S.added.length} сл.</option></optgroup>`;
 }
 const lvl = w => { const s = wRec(w.n); return s ? '●'.repeat(s.level || 0) + '○'.repeat(6 - (s.level || 0)) : 'новое'; };
 const seg = (attr, items, cur, label) => `<div class="seg" role="group" aria-label="${label}">${items.map(([k, l]) => `<button type="button" data-${attr}="${k}" aria-pressed="${k === cur}">${l}</button>`).join('')}</div>`;
@@ -567,9 +816,9 @@ function wCardsHTML(task){
 }
 function vWords(r){
   const rr = r.q.get('r');
-  if(rr && (rr === 'all' || /^[cu]:\d+$/.test(rr))){ WS.range = rr; saveLS('range', rr); }
+  if(rr && RANGE_RE.test(rr)){ WS.range = rr; saveLS('range', rr); }
   WS.mode = r.q.get('m') === 'quiz' ? 'quiz' : 'cards';
-  return `${subHead('#/dict', 'Словарь', 'Слова', 'Лексический минимум Маунса, главы 4–36')}
+  return `${subHead('#/dict', 'Словарь', 'Слова', `<span id="w-title">${esc(rangeTitle())}</span>`)}
     <div class="trainer">
       ${seg('wmode', [['cards','Карточки'],['quiz','Тест']], WS.mode, 'Режим')}
       <select class="inp" id="wRange" aria-label="Главы">${rangeOptions()}</select>
@@ -587,7 +836,7 @@ function vWords(r){
 }
 function initWords(){
   $('#wRange').value = WS.range;
-  $('#wRange').onchange = () => { WS.range = $('#wRange').value; saveLS('range', WS.range); buildWDeck(); WQ.list = []; if(WS.mode === 'quiz') startWQuiz(); };
+  $('#wRange').onchange = () => { WS.range = $('#wRange').value; saveLS('range', WS.range); $('#w-title').textContent = rangeTitle(); buildWDeck(); WQ.list = []; if(WS.mode === 'quiz') startWQuiz(); };
   $$('[data-wmode]').forEach(b => b.onclick = () => { WS.mode = b.dataset.wmode; pressed($$('[data-wmode]'), b);
     $('#w-cards').hidden = WS.mode !== 'cards'; $('#w-quiz').hidden = WS.mode !== 'quiz';
     if(WS.mode === 'quiz' && !WQ.list.length) startWQuiz(); if(WS.mode === 'cards') wStats(); });
@@ -609,10 +858,14 @@ function startWCards(task){
   $$('[data-wset]').forEach(b => b.onclick = () => { WS.set = b.dataset.wset; pressed($$('[data-wset]'), b); buildWDeck(); });
   buildWDeck();
 }
-function wGreekFace(w){ const [h, r] = split(w.g); return `<div class="num">гл. ${w.ch}</div><div class="lvl">${lvl(w)}</div><div class="wg">${h}</div>${r ? `<div class="wforms">${r}</div>` : ''}<div class="hint">нажмите, чтобы перевернуть</div>`; }
-function wRuFace(w){ const L = w.ru.length; return `<div class="num">гл. ${w.ch}</div><div class="lvl">${lvl(w)}</div><div class="wru" style="margin:0;font-size:${L < 16 ? 2.2 : L < 40 ? 1.7 : 1.3}rem">${esc(w.ru)}</div><div class="hint">как по-гречески? нажмите</div>`; }
-function wBackFace(w){ const [h, r] = split(w.g); return `<div class="num">гл. ${w.ch}</div><div class="lvl">${lvl(w)}</div><div class="wg sm">${h}</div>${r ? `<div class="wforms">${r}</div>` : ''}
-  <div class="wru">${esc(w.ru)}</div><div class="note">В Новом Завете: ${times(w.f)}</div><div class="src">Маунс, гл. ${w.ch}, с. ${w.p}</div>`; }
+// Метка в углу карточки: глава минимума или «словарь»; источник: глава или страница словаря
+const wTag = w => w.min ? `гл. ${w.ch}` : 'словарь';
+const wSrc = w => w.min ? `Маунс, гл. ${w.ch}, с. ${w.p}` : `Маунс, словарь, с. ${w.p}`;
+const wFormsLine = w => { const d = w.d; return d && d.k === 'v' && d.pp ? `<div class="wpp gr">${(d.im ? `(${esc(d.im)}), ` : '') + d.pp.map(esc).join(', ')}</div>` : ''; };
+function wGreekFace(w){ const [h, r] = split(w.g); return `<div class="num">${wTag(w)}</div><div class="lvl">${lvl(w)}</div><div class="wg">${esc(h)}</div>${r ? `<div class="wforms">${esc(r)}</div>` : ''}<div class="hint">нажмите, чтобы перевернуть</div>`; }
+function wRuFace(w){ const L = w.ru.length; return `<div class="num">${wTag(w)}</div><div class="lvl">${lvl(w)}</div><div class="wru" style="margin:0;font-size:${L < 16 ? 2.2 : L < 40 ? 1.7 : 1.3}rem">${esc(w.ru)}</div><div class="hint">как по-гречески? нажмите</div>`; }
+function wBackFace(w){ const [h, r] = split(w.g); return `<div class="num">${wTag(w)}</div><div class="lvl">${lvl(w)}</div><div class="wg sm">${esc(h)}</div>${r ? `<div class="wforms">${esc(r)}</div>` : ''}
+  <div class="wru">${esc(w.ru)}</div>${wFormsLine(w)}<div class="note">В Новом Завете: ${times(w.f)}</div><div class="src">${wSrc(w)}</div>`; }
 function buildWDeck(){
   const t = today();
   if(WS.task){
@@ -645,14 +898,11 @@ function wStats(){
 }
 function wNext(ok){
   const w = WS.deck[WS.idx]; if(!w) return;
-  const t = today(), s = wRec(w.n);
-  if(ok){
-    if(!s || WS.failed.has(w.n)) setWord(w.n, {level: 1, due: addDays(t, 1), hard: false});
-    else if(s.due <= t){ const b = Math.min((s.level || 0) + 1, 6); setWord(w.n, {level: b, due: addDays(t, INT[b]), hard: false}); }
-    else if(s.hard) setWord(w.n, {hard: false});
-    WS.known++;
-  } else {
-    setWord(w.n, {level: 0, due: t, hard: true}); WS.failed.add(w.n);
+  const patch = srsPatch(wRec(w.n), WS.failed.has(w.n), ok);
+  if(patch) setWord(w.n, patch);
+  if(ok) WS.known++;
+  else {
+    WS.failed.add(w.n);
     WS.deck.splice(Math.min(WS.idx + 4, WS.deck.length), 0, w); // вернётся через три карточки
   }
   WS.idx++;
@@ -664,11 +914,12 @@ function wFinish(){
   if(WS.task){
     const k = WS.task.key;
     if(WS.deck.length) markTask(k, k === 'review' ? WS.size : 0);
-    const tomorrow = WORDS.filter(w => wRec(w.n) && wRec(w.n).due <= addDays(today(), 1)).length;
+    const tomorrow = LEX.filter(w => wRec(w.n) && wRec(w.n).due <= addDays(today(), 1)).length;
     box.innerHTML = taskDoneHTML(WS.deck.length ? `Задание выполнено: ${WS.size} ${plural(WS.size, WORDS_F)}. Завтра к повторению: <b>${tomorrow}</b>.` : (k === 'review' ? 'На сегодня всё повторено.' : 'Эти слова уже пройдены.'));
     return;
   }
   const R = rangeWords(), t = today(), fresh = R.filter(w => !wRec(w.n)).length, tomorrow = R.filter(w => wRec(w.n) && wRec(w.n).due <= addDays(t, 1)).length;
+  if(!R.length){ box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>В этом наборе пока нет слов. Откройте слово в словаре и нажмите «Добавить в изучение».</p><a class="btn primary" href="#/dict">Открыть словарь</a>`; return; }
   box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>${WS.set === 'srs'
     ? `${WS.deck.length ? 'Сессия завершена.' : 'На сегодня всё повторено.'} Завтра к повторению: <b>${tomorrow}</b>.${fresh ? ` Новых слов в наборе: ${fresh}.` : ''}`
     : `Круг пройден. Отмечено «знаю»: <b>${WS.known}</b> из <b>${WS.size}</b>.`}</p>
@@ -684,12 +935,13 @@ const toks = ru => ru.toLowerCase().replace(/\(.*?\)/g, '').split(/[;,]/).map(x 
 const clash = (a, b) => { const A = toks(a.ru); return toks(b.ru).some(x => A.includes(x)); };
 function distractors(w, R){
   const out = [], ok = x => x !== w && !clash(w, x) && !out.some(o => o === x || clash(o, x));
-  for(const pool of [R.filter(x => x.k === w.k), WORDS.filter(x => x.k === w.k), WORDS])
+  for(const pool of [R.filter(x => x.k === w.k), LEX.filter(x => x.k === w.k), LEX])
     for(const x of shuffle(pool)){ if(out.length === 3) return out; if(ok(x)) out.push(x); }
   return out;
 }
 function startWQuiz(){
   const R = rangeWords(), hard = w => (wRec(w.n) || {}).hard;
+  if(!R.length){ $('#wqArea').hidden = true; $('#wqDone').hidden = false; $('#wqPct').textContent = ''; $('#wqSum').textContent = 'В этом наборе пока нет слов.'; $('#wqMiss').textContent = 'Откройте слово в словаре и нажмите «Добавить в изучение».'; return; }
   WQ.list = shuffle(shuffle(R.filter(hard)).concat(shuffle(R.filter(w => !hard(w)))).slice(0, QUIZ_N));
   WQ.i = 0; WQ.score = 0; WQ.miss = []; $('#wqDone').hidden = true; $('#wqArea').hidden = false; wAsk();
 }
@@ -700,22 +952,190 @@ function wAsk(){
   $('#wqMeta').textContent = `Вопрос ${WQ.i + 1} из ${N}`; $('#wqScore').textContent = `верно: ${WQ.score}`;
   $('#wqBar').style.width = (WQ.i / N * 100) + '%';
   $('#wqAsk').textContent = tr ? 'Что означает слово?' : 'Как это по-гречески?';
-  const p = $('#wqPrompt'); p.className = 'prompt ' + (tr ? 'word' : 'text ask'); p.innerHTML = tr ? w.g : esc(w.ru);
+  const p = $('#wqPrompt'); p.className = 'prompt ' + (tr ? 'word' : 'text ask'); p.innerHTML = tr ? esc(w.g) : esc(w.ru);
   p.style.fontSize = tr ? '' : (w.ru.length < 16 ? '2.2rem' : w.ru.length < 40 ? '1.6rem' : '1.25rem');
   const box = $('#wqOpts'); box.className = 'opts' + (tr ? ' one' : ''); box.innerHTML = '';
   opts.forEach(o => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn ' + (tr ? 'ru' : 'wgr');
-    b.innerHTML = tr ? esc(o.ru) : o.g; b.dataset.ok = o === w ? 1 : 0; b.onclick = () => wAnswer(b, o === w, w); box.appendChild(b); });
+    b.innerHTML = tr ? esc(o.ru) : esc(o.g); b.dataset.ok = o === w ? 1 : 0; b.onclick = () => wAnswer(b, o === w, w); box.appendChild(b); });
 }
 function wAnswer(b, ok, w){
   $$('#wqOpts .btn').forEach(x => { x.disabled = true; if(x.dataset.ok === '1') x.classList.add('right'); });
   if(ok) WQ.score++; else { b.classList.add('wrong'); WQ.miss.push(w); setWord(w.n, {level: 0, due: today(), hard: true}); }
-  $('#wqFb').innerHTML = `<b class="${ok ? 'good-t' : 'bad-t'}">${ok ? 'Верно' : 'Неверно'}.</b> <span class="gr big-gr">${w.g}</span>: ${esc(w.ru)}. Гл. ${w.ch}, с. ${w.p}.`;
+  $('#wqFb').innerHTML = `<b class="${ok ? 'good-t' : 'bad-t'}">${ok ? 'Верно' : 'Неверно'}.</b> <span class="gr big-gr">${esc(w.g)}</span>: ${esc(w.ru)}. ${wSrc(w).replace('Маунс, ', '')}.`;
   $('#wqScore').textContent = `верно: ${WQ.score}`; $('#wqNext').hidden = false; $('#wqNext').focus();
 }
 function wqFinish(){
   const N = WQ.list.length; $('#wqArea').hidden = true; $('#wqDone').hidden = false; $('#wqBar').style.width = '100%';
   $('#wqPct').textContent = Math.round(WQ.score / N * 100) + '%'; $('#wqSum').textContent = `Верно ${WQ.score} из ${N}.`;
-  $('#wqMiss').innerHTML = WQ.miss.length ? `Ошибки: <span class="gr big-gr">${WQ.miss.map(w => split(w.g)[0]).join(', ')}</span>. Эти слова попали в «Трудные» и вернутся в повторение сегодня.` : 'Без ошибок.';
+  $('#wqMiss').innerHTML = WQ.miss.length ? `Ошибки: <span class="gr big-gr">${WQ.miss.map(w => esc(split(w.g)[0])).join(', ')}</span>. Эти слова попали в «Трудные» и вернутся в повторение сегодня.` : 'Без ошибок.';
+}
+
+/* ---------- Основные формы глаголов: карточки, тест «Какая это форма?», таблица ---------- */
+// Порядок повторения тот же, что у слов; прогресс в parts_progress (номер глагола из parts.js)
+const PS = {set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false, mode: 'cards', focus: 0};
+const PQ = {list: [], i: 0, score: 0, miss: []};
+const plvl = v => { const s = pRec(v.n); return s ? '●'.repeat(s.level || 0) + '○'.repeat(6 - (s.level || 0)) : 'новый'; };
+function pCardsHTML(task){
+  return `${task ? '' : `<div class="row between">${seg('pset', [['srs','Повторение'],['all','Все'],['hard','Трудные']], PS.set, 'Набор')}<button type="button" class="btn sm" id="pShuffle">Перемешать</button></div>`}
+    <div class="pbar thin"><i id="pBar"></i></div>
+    <div class="row between"><span class="meta" id="pMeta"></span></div>
+    <div id="pArea">
+      <div class="stage"><div class="fcard" id="pCard" tabindex="0" role="button" aria-label="Перевернуть карточку"><div class="face front" id="pFront"></div><div class="face back pback" id="pBack"></div></div></div>
+      <div class="grid2"><button type="button" class="btn bad" id="pAgain">Повторить</button><button type="button" class="btn good" id="pKnow">Знаю</button></div>
+    </div>
+    <div class="done-box" id="pDone" hidden></div>
+    ${task ? '' : '<p class="meta center" id="pStats"></p>'}`;
+}
+function vParts(r){
+  PS.mode = ['quiz', 'table'].includes(r.q.get('m')) ? r.q.get('m') : 'cards';
+  PS.focus = +r.q.get('v') || 0;
+  return `${subHead('#/course', 'Курс', 'Основные формы глаголов', `${VERBS.length} глаголов, которые встречаются в Новом Завете 50 раз и больше. Учебник, с. 412–421`)}
+    <div class="trainer${PS.mode === 'table' ? ' wide' : ''}" id="p-trainer">
+      ${seg('pmode', [['cards','Карточки'],['quiz','Тест'],['table','Таблица']], PS.mode, 'Режим')}
+      <section id="p-cards"${PS.mode === 'cards' ? '' : ' hidden'}>${pCardsHTML(false)}</section>
+      <section id="p-quiz"${PS.mode === 'quiz' ? '' : ' hidden'}>
+        <div class="pbar thin"><i id="pqBar"></i></div>
+        <div class="row between"><span class="meta" id="pqMeta"></span><span class="meta" id="pqScore"></span></div>
+        <div id="pqArea"><div class="qbox"><div class="meta">Какая это форма?</div><div class="prompt word" id="pqPrompt"></div></div>
+          <div class="opts one" id="pqOpts"></div><div class="feedback" id="pqFb"></div>
+          <button type="button" class="btn primary wide" id="pqNext" hidden>Дальше</button></div>
+        <div class="done-box" id="pqDone" hidden><div class="pct" id="pqPct"></div><p id="pqSum"></p><p class="meta" id="pqMiss"></p><button type="button" class="btn primary" id="pqRestart">Ещё раз</button></div>
+      </section>
+      <section id="p-table"${PS.mode === 'table' ? '' : ' hidden'}>${partsTableHTML()}</section>
+    </div>`;
+}
+function partsTableHTML(){
+  return `<p class="hint">Полужирным выделены формы, которые книга советует заучить, остальные подчиняются правилам (с. 413). Нажмите на глагол, чтобы открыть его статью и сноски.</p>
+    <div class="card flat scroll-x"><table class="pp-table"><thead><tr>${PP_SHORT.map(l => `<th>${l}</th>`).join('')}</tr></thead><tbody>${VERBS.map(v =>
+    `<tr data-pv="${v.n}">${[v.v].concat(v.f).map((f, i) => `<td class="gr${(v.b || []).includes(i) ? ' bold' : ''}">${i ? '' : `<span class="dot ${DOT[pState(v.n)]}"></span>`}${esc(f)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+function initParts(){
+  $$('[data-pmode]').forEach(b => b.onclick = () => { PS.mode = b.dataset.pmode; pressed($$('[data-pmode]'), b);
+    ['cards', 'quiz', 'table'].forEach(m => { $('#p-' + m).hidden = m !== PS.mode; });
+    $('#p-trainer').classList.toggle('wide', PS.mode === 'table');
+    if(PS.mode === 'quiz' && !PQ.list.length) startPQuiz(); });
+  $('#pqNext').onclick = () => { PQ.i++; PQ.i >= PQ.list.length ? pqFinish() : pAsk(); };
+  $('#pqRestart').onclick = startPQuiz;
+  $('#p-table').onclick = e => { const tr = e.target.closest('[data-pv]'); if(tr) openWord(VERB.get(+tr.dataset.pv).d); };
+  startPCards(null);
+  PQ.list = [];
+  if(PS.mode === 'quiz') startPQuiz();
+}
+function startPCards(task){
+  PS.task = task; PS.rendered = false;
+  $('#pCard').onclick = e => { if(!e.target.closest('a')) $('#pCard').classList.toggle('flipped'); };
+  $('#pCard').onkeydown = e => { if(e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); $('#pCard').classList.toggle('flipped'); } };
+  $('#pKnow').onclick = () => pNext(true); $('#pAgain').onclick = () => pNext(false);
+  if($('#pShuffle')) $('#pShuffle').onclick = buildPDeck;
+  $$('[data-pset]').forEach(b => b.onclick = () => { PS.set = b.dataset.pset; pressed($$('[data-pset]'), b); PS.focus = 0; buildPDeck(); });
+  buildPDeck();
+}
+function buildPDeck(){
+  const t = today();
+  if(PS.task){
+    const d = taskDeck(PS.task), fresh = d.filter(v => !pRec(v.n));
+    PS.deck = shuffle(d.filter(v => pRec(v.n))).concat(fresh);
+  } else {
+    if(PS.set === 'hard' && !VERBS.some(v => (pRec(v.n) || {}).hard)){ PS.set = 'all'; pressed($$('[data-pset]'), $('[data-pset=all]')); }
+    if(PS.set === 'srs') PS.deck = shuffle(VERBS.filter(v => pRec(v.n) && pRec(v.n).due <= t)).concat(VERBS_BY_FREQ.filter(v => !pRec(v.n)).slice(0, NEW_PARTS));
+    else PS.deck = shuffle(PS.set === 'hard' ? VERBS.filter(v => (pRec(v.n) || {}).hard) : VERBS);
+    // открыт из статьи слова: этот глагол первым
+    const f = VERB.get(PS.focus);
+    if(f){ PS.deck = [f].concat(PS.deck.filter(v => v !== f)); PS.focus = 0; }
+  }
+  PS.idx = 0; PS.known = 0; PS.failed.clear(); PS.size = new Set(PS.deck.map(v => v.n)).size;
+  if(!PS.deck.length) return pFinish();
+  $('#pDone').hidden = true; $('#pArea').hidden = false; pRender();
+}
+function pFront(v){ return `<div class="num">№ ${v.n}</div><div class="lvl">${plvl(v)}</div><div class="wg">${esc(v.v)}</div><div class="wru">${esc(v.ru)}</div><div class="hint">какие у него формы? нажмите</div>`; }
+function pBack(v){ return `<div class="pb-head"><span class="gr">${esc(v.v)}</span><span class="muted">${esc(v.ru)}</span></div>${partsBlock(v)}<div class="src">Маунс, с. ${v.p}</div>`; }
+function pRender(){
+  const v = PS.deck[PS.idx], c = $('#pCard'); c.classList.remove('flipped');
+  setTimeout(() => { $('#pFront').innerHTML = pFront(v); $('#pBack').innerHTML = pBack(v); $('#pBack').scrollTop = 0; }, PS.rendered ? 120 : 0);
+  PS.rendered = true;
+  $('#pMeta').textContent = `Карточка ${PS.idx + 1} из ${PS.deck.length}`;
+  $('#pBar').style.width = (PS.idx / PS.deck.length * 100) + '%';
+  pStats();
+}
+function pStats(){
+  const el = $('#pStats'); if(!el) return;
+  const t = today(); let st = 0, due = 0, sure = 0, hard = 0;
+  VERBS.forEach(v => { const s = pRec(v.n); if(s){ st++; if(s.due <= t) due++; if((s.level || 0) >= SURE) sure++; if(s.hard) hard++; } });
+  el.textContent = `Глаголов ${VERBS.length} · начато ${st} · уверенно ${sure} · к повторению ${due} · трудных ${hard}`;
+}
+function pNext(ok){
+  const v = PS.deck[PS.idx]; if(!v) return;
+  const patch = srsPatch(pRec(v.n), PS.failed.has(v.n), ok);
+  if(patch) setPart(v.n, patch);
+  if(ok) PS.known++;
+  else { PS.failed.add(v.n); PS.deck.splice(Math.min(PS.idx + 4, PS.deck.length), 0, v); }
+  PS.idx++;
+  PS.idx >= PS.deck.length ? pFinish() : pRender();
+}
+function pFinish(){
+  $('#pArea').hidden = true; $('#pDone').hidden = false; $('#pBar').style.width = '100%'; $('#pMeta').textContent = '';
+  const box = $('#pDone'), tomorrow = VERBS.filter(v => pRec(v.n) && pRec(v.n).due <= addDays(today(), 1)).length;
+  if(PS.task){
+    if(PS.deck.length) markTask('parts', PS.size);
+    box.innerHTML = taskDoneHTML(PS.deck.length ? `Задание выполнено: ${PS.size} ${plural(PS.size, VERBS_F)}. Завтра к повторению: <b>${tomorrow}</b>.` : 'Эти глаголы уже пройдены.');
+    return;
+  }
+  const fresh = VERBS.filter(v => !pRec(v.n)).length;
+  box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>${PS.set === 'srs'
+    ? `${PS.deck.length ? 'Сессия завершена.' : 'На сегодня всё повторено.'} Завтра к повторению: <b>${tomorrow}</b>.${fresh ? ` Новых глаголов: ${fresh}.` : ''}`
+    : `Круг пройден. Отмечено «знаю»: <b>${PS.known}</b> из <b>${PS.size}</b>.`}</p>
+    <div class="row center">${PS.set === 'srs' && fresh ? `<button type="button" class="btn primary" id="pMore">Ещё ${Math.min(NEW_PARTS, fresh)} новых</button>` : ''}<button type="button" class="btn" id="pRestart">${PS.set === 'srs' ? 'Все глаголы' : 'Начать заново'}</button></div>`;
+  if($('#pMore')) $('#pMore').onclick = buildPDeck;
+  $('#pRestart').onclick = () => { if(PS.set === 'srs'){ PS.set = 'all'; pressed($$('[data-pset]'), $('[data-pset=all]')); } buildPDeck(); };
+  pStats();
+}
+// Тест: дана форма, выбрать глагол и какая это из форм. Неверные варианты: другая форма того же глагола
+// и та же форма других глаголов. Вариант, который даёт ту же самую форму, не предлагается
+const formOf = (v, i) => i ? v.f[i - 1] : v.v;
+const optKey = (v, i) => v.n + ':' + i;
+function startPQuiz(){
+  const all = [];
+  VERBS.forEach(v => v.f.forEach((f, j) => { if(f !== '–') all.push({v, i: j + 1}); }));
+  const hard = q => (pRec(q.v.n) || {}).hard;
+  // по одной форме от глагола, сначала трудные глаголы
+  const byVerb = new Map(); shuffle(all).forEach(q => { if(!byVerb.has(q.v.n)) byVerb.set(q.v.n, q); });
+  const qs = [...byVerb.values()];
+  PQ.list = shuffle(shuffle(qs.filter(hard)).concat(shuffle(qs.filter(q => !hard(q)))).slice(0, QUIZ_N));
+  PQ.i = 0; PQ.score = 0; PQ.miss = []; $('#pqDone').hidden = true; $('#pqArea').hidden = false; pAsk();
+}
+function pOptions(q){
+  const form = formOf(q.v, q.i), out = [q], keys = new Set([optKey(q.v, q.i)]);
+  const ok = (v, i) => i > 0 && formOf(v, i) !== '–' && formOf(v, i) !== form && !keys.has(optKey(v, i));
+  const add = (v, i) => { if(out.length < 4 && ok(v, i)){ out.push({v, i}); keys.add(optKey(v, i)); } };
+  shuffle([1, 2, 3, 4, 5]).forEach(i => add(q.v, i));
+  if(out.length > 2) out.length = 2; keys.clear(); out.forEach(o => keys.add(optKey(o.v, o.i)));
+  shuffle(VERBS.filter(v => v !== q.v)).forEach(v => add(v, q.i));
+  shuffle(VERBS).forEach(v => shuffle([1, 2, 3, 4, 5]).forEach(i => add(v, i)));
+  return shuffle(out);
+}
+function pAsk(){
+  const q = PQ.list[PQ.i], N = PQ.list.length;
+  $('#pqFb').innerHTML = ''; $('#pqNext').hidden = true;
+  $('#pqMeta').textContent = `Вопрос ${PQ.i + 1} из ${N}`; $('#pqScore').textContent = `верно: ${PQ.score}`;
+  $('#pqBar').style.width = (PQ.i / N * 100) + '%';
+  $('#pqPrompt').textContent = formOf(q.v, q.i);
+  const box = $('#pqOpts'); box.innerHTML = '';
+  pOptions(q).forEach(o => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn popt';
+    const right = o.v === q.v && o.i === q.i;
+    b.innerHTML = `<span class="gr">${esc(o.v.v)}</span><small>${PP_LABELS[o.i].toLowerCase()}</small>`; b.dataset.ok = right ? 1 : 0;
+    b.onclick = () => pAnswer(b, right, q); box.appendChild(b); });
+}
+function pAnswer(b, ok, q){
+  $$('#pqOpts .btn').forEach(x => { x.disabled = true; if(x.dataset.ok === '1') x.classList.add('right'); });
+  if(ok) PQ.score++; else { b.classList.add('wrong'); PQ.miss.push(q); setPart(q.v.n, {level: 0, due: today(), hard: true}); }
+  const note = (q.v.fn || {})[q.i];
+  $('#pqFb').innerHTML = `<b class="${ok ? 'good-t' : 'bad-t'}">${ok ? 'Верно' : 'Неверно'}.</b> <span class="gr big-gr">${esc(formOf(q.v, q.i))}</span>: ${esc(PP_LABELS[q.i].toLowerCase())} от <span class="gr big-gr">${esc(q.v.v)}</span> (${esc(q.v.ru)}).${note ? ` <span class="muted">${esc(note)}</span>` : ''}`;
+  $('#pqScore').textContent = `верно: ${PQ.score}`; $('#pqNext').hidden = false; $('#pqNext').focus();
+}
+function pqFinish(){
+  const N = PQ.list.length; $('#pqArea').hidden = true; $('#pqDone').hidden = false; $('#pqBar').style.width = '100%';
+  $('#pqPct').textContent = Math.round(PQ.score / N * 100) + '%'; $('#pqSum').textContent = `Верно ${PQ.score} из ${N}.`;
+  $('#pqMiss').innerHTML = PQ.miss.length ? `Ошибки: <span class="gr big-gr">${PQ.miss.map(q => esc(formOf(q.v, q.i))).join(', ')}</span>. Эти глаголы попали в «Трудные» и вернутся в повторение сегодня.` : 'Без ошибок.';
 }
 
 /* ---------- Алфавит, глава 3 (как в старом приложении) ---------- */
@@ -858,25 +1278,38 @@ function aqFinish(){
 }
 
 /* ---------- Прогресс ---------- */
+// «12,3%» — доля текста НЗ, которую составляют выученные слова
+const pctNT = () => { const x = coverage() / NT_WORDS * 100; return (x > 0 && x < 0.1 ? '0,1' : x.toLocaleString('ru-RU', {maximumFractionDigits: 1})) + '%'; };
+const STATE_PARTS = [['sure', 'Уверенно', 'интервал от двух недель'], ['learn', 'В изучении', ''], ['hard', 'Трудные', 'ошибка или «Повторить»'], ['new', 'Впереди', 'ещё не начаты']];
+function stackCard(title, total, c, sub){
+  return `<section class="card"><div class="plan-top"><h2>${title}</h2><span class="muted">${total} ${sub}</span></div>
+    <div class="stack-bar" aria-hidden="true">${STATE_PARTS.map(([k]) => c[k] ? `<i class="${k}" style="flex:${c[k]}"></i>` : '').join('')}</div>
+    <ul class="legend">${STATE_PARTS.map(([k, l, s]) => `<li><span class="sw ${k}"></span><span class="tt"><b>${l}</b>${s ? `<small>${s}</small>` : ''}</span><b class="n">${c[k]}</b></li>`).join('')}</ul>
+  </section>`;
+}
 function vProgress(){
-  const c = wordCounts(), total = WORDS.length, kn = lettersKnown(), st = streak();
-  const parts = [['sure', 'Уверенно', 'интервал от двух недель'], ['learn', 'В изучении', ''], ['hard', 'Трудные', 'ошибка или «Повторить»'], ['new', 'Впереди', 'ещё не начаты']];
+  const kn = lettersKnown(), st = streak(), cov = coverage(), learned = LEX.filter(w => isLearned(w.n)).length;
   const week = Array.from({length: 7}, (_, i) => addDays(weekStart(), i)), plans = planMap(), t = today();
-  return `${head('Прогресс', 'Слова, алфавит и дни занятий')}
+  const all = {sure:0, learn:0, hard:0, new:0}; LEX.forEach(w => all[wState(w.n)]++);
+  const pc = {sure:0, learn:0, hard:0, new:0}; VERBS.forEach(v => pc[pState(v.n)]++);
+  return `${head('Прогресс', 'Слова, основные формы, алфавит и дни занятий')}
     <div class="cols"><div class="col">
-      <section class="card"><div class="plan-top"><h2>Слова минимума</h2><span class="muted">${total} слов</span></div>
-        <div class="stack-bar" aria-hidden="true">${parts.map(([k]) => c[k] ? `<i class="${k}" style="flex:${c[k]}"></i>` : '').join('')}</div>
-        <ul class="legend">${parts.map(([k, l, s]) => `<li><span class="sw ${k}"></span><span class="tt"><b>${l}</b>${s ? `<small>${s}</small>` : ''}</span><b class="n">${c[k]}</b></li>`).join('')}</ul>
-      </section>
+      <section class="card nt-card"><h2>Текст Нового Завета</h2>
+        <p class="nt-line">Вы знаете слова, которые составляют <b>${pctNT()}</b> текста Нового Завета.</p>
+        ${bar(cov, NT_WORDS, 'good')}
+        <p class="hint">Выучено слов: ${learned}. Вместе они встречаются ${times(cov)} из ${NT_WORDS.toLocaleString('ru-RU')} слов текста. Выученным считается слово, которое вы хотя бы раз отметили «Знаю» и которое сейчас не трудное.</p></section>
+      ${stackCard('Слова минимума', MINW.length, wordCounts(), plural(MINW.length, WORDS_F))}
+      ${stackCard('Весь словарь', LEX.length, all, plural(LEX.length, WORDS_F))}
     </div><div class="col">
-      <section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${kn} из ${LETTERS.length}</span></div>${bar(kn, LETTERS.length, 'good')}
-        <a class="btn" href="#/abc">Открыть алфавит</a></section>
       <section class="card week-card" data-act="calendar" role="button" tabindex="0" aria-label="План выполнен: ${st} ${plural(st, DAYS_F)} подряд. Открыть календарь занятий">
         <div class="plan-top"><h2>План выполнен</h2><span class="muted">${st} ${plural(st, DAYS_F)} подряд</span></div>
         <div class="days" aria-hidden="true">${week.map((d, i) => { const dd = +d.slice(8), s = dayState(plans.get(d));
           return `<span class="${s}${d === t ? ' today' : ''}${d > t ? ' future' : ''}"><small>${WDM[i]}</small><i>${s === 'full' ? ICON.check : dd}</i></span>`; }).join('')}</div>
         <span class="week-more">${ICON.cal}Календарь занятий${ICON.chev}</span>
       </section>
+      ${stackCard('Основные формы', VERBS.length, pc, plural(VERBS.length, VERBS_F))}
+      <section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${kn} из ${LETTERS.length}</span></div>${bar(kn, LETTERS.length, 'good')}
+        <a class="btn" href="#/abc">Открыть алфавит</a></section>
     </div></div>`;
 }
 
@@ -889,6 +1322,13 @@ function vProfile(){
     <section class="card me-card"><span class="me xl" aria-hidden="true" data-av>${avatarInner(u)}</span><div class="who"><b>${esc(u.name || 'Без имени')}</b><span>${esc(u.email || '')}</span>
         <button type="button" class="btn sm" data-act="avatar">${u.avatar ? 'Изменить фото' : 'Поставить фото'}</button></div>
       <button type="button" class="icon-btn" data-act="edit-name" aria-label="Изменить имя">${ICON.pen}</button></section>
+    <section class="card"><h2>План на день</h2>
+      <div class="field"><span class="flabel">Что учить дальше</span>
+        <div class="seg3 two" role="radiogroup" aria-label="Что учить дальше">${[['chapters','По главам учебника'],['freq','По частоте']].map(([k, l]) =>
+          `<input type="radio" name="p-order" id="p-order-${k}" value="${k}"${planOrder() === k ? ' checked' : ''}><label for="p-order-${k}">${l}</label>`).join('')}</div>
+        <p class="hint">${planOrder() === 'freq' ? 'Новые слова из всего словаря учебника, от самых частых в Новом Завете к редким. Уже начатые слова пропускаются.' : 'Новые слова по порядку глав: сначала лексический минимум, потом остальной словарь от частых слов к редким.'} Слова, которые вы добавили из словаря, тоже приходят в новые слова, до 10 в день.</p></div>
+      <label class="check"><input type="checkbox" id="p-parts"${partsOn() ? ' checked' : ''}><span>Основные формы глаголов в плане: ${NEW_PARTS} новых глаголов в день и повторение тех, у кого подошёл срок</span></label>
+    </section>
     <section class="card"><h2>Оформление</h2>
       <div class="seg3" role="radiogroup" aria-label="Тема">${[['light','Светлая'],['dark','Тёмная'],['auto','Как в системе']].map(([k, l]) =>
         `<input type="radio" name="p-theme" id="p-theme-${k}" value="${k}"${themePref() === k ? ' checked' : ''}><label for="p-theme-${k}">${l}</label>`).join('')}</div></section>
@@ -909,7 +1349,7 @@ function vProfile(){
       <button type="button" class="btn" data-act="save-pass">Сменить пароль</button></div></details>
     <button type="button" class="btn wide" data-act="logout">Выйти</button>
     <details class="fold card"><summary><span>Удаление аккаунта</span>${ICON.chev}</summary><div class="fold-body">
-      <p class="hint">Вместе с аккаунтом удалится весь прогресс: слова, буквы и планы. Вернуть их будет нельзя.</p>
+      <p class="hint">Вместе с аккаунтом удалится весь прогресс: слова, основные формы, буквы и планы. Вернуть их будет нельзя.</p>
       <button type="button" class="btn danger" data-act="delete-account">Удалить аккаунт и все данные</button></div></details>
     <p class="hint"><a href="/privacy.html" target="_blank" rel="noopener">Политика конфиденциальности</a></p>
     </div></div>`;
@@ -919,7 +1359,21 @@ async function loadProfileExtras(){
   if(route().name === 'profile') schedule();
 }
 window.addEventListener('hashchange', () => { if(route().name === 'profile' && S.loaded) loadProfileExtras(); });
-document.addEventListener('change', e => { if(e.target.name === 'p-theme') setTheme(e.target.value); });
+document.addEventListener('change', e => {
+  if(e.target.name === 'p-theme') setTheme(e.target.value);
+  if(e.target.name === 'p-order') savePlanSettings({plan_order: e.target.value}, e.target);
+  if(e.target.id === 'p-parts') savePlanSettings({parts_off: !e.target.checked}, e.target);
+});
+// Настройки плана хранятся в профиле; план на сегодня пересобирается, если задание ещё не начато
+async function savePlanSettings(patch, el){
+  try {
+    const r = await pb.collection('users').update(me().id, patch);
+    pb.authStore.save(pb.authStore.token, r);
+    replanToday();
+    toast('Сохранено. План на сегодня обновлён');
+    render(true);
+  } catch(e){ toast(errText(e)); render(true); }
+}
 // открытый блок «Приглашения» остаётся открытым после перерисовки
 document.addEventListener('toggle', e => { const f = e.target.dataset && e.target.dataset.fold; if(f) e.target.open ? UI.folds.add(f) : UI.folds.delete(f); }, true);
 
@@ -1403,7 +1857,7 @@ async function accountAction(a, d){
 }
 
 let tt = 0;
-function toast(msg){ const el = $('#toast'); const host = [cropDlg, calDlg, dlg].find(x => x.open) || document.body; if(el.parentNode !== host) host.appendChild(el); el.textContent = msg; el.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => el.classList.remove('show'), 2800); }
+function toast(msg){ const el = $('#toast'); const host = [cropDlg, calDlg, wcDlg, dlg].find(x => x.open) || document.body; if(el.parentNode !== host) host.appendChild(el); el.textContent = msg; el.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => el.classList.remove('show'), 2800); }
 
 boot();
 })();
