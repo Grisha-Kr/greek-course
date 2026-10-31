@@ -452,7 +452,7 @@ button.wh:focus-visible{outline:2px solid var(--accent);outline-offset:2px;borde
 .face.pback .src{margin-top:auto;padding-top:6px}
 .trainer.wide{max-width:none}
 .scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.pp-table{min-width:760px}
+.pp-table{min-width:100%;width:auto}
 .pp-table th{white-space:nowrap}
 .pp-table td{font-size:17px;white-space:nowrap}
 .pp-table tbody tr{cursor:pointer}
@@ -466,3 +466,58 @@ button.wh:focus-visible{outline:2px solid var(--accent);outline-offset:2px;borde
 .nt-line b{font-family:var(--f-head);font-size:22px;color:var(--good)}
 .seg3.two{grid-template-columns:repeat(2,1fr)}
 .flabel{font-size:13.5px;font-weight:600;color:var(--muted)}
+
+/* ---------- Правки 2.1: текущая глава, статусы глав, карточки форм ---------- */
+.chap-now{gap:10px}
+.chap-now .pages{font-size:14px;color:var(--muted);line-height:1.5}
+.chap-now > .btn{align-self:flex-start}
+.tolearn{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.tolearn summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:46px;cursor:pointer;font-weight:600}
+.tolearn summary::-webkit-details-marker{display:none}
+.tolearn summary .chev{width:18px;height:18px;color:var(--muted);transition:transform .2s;flex:none}
+.tolearn[open] summary .chev{transform:rotate(90deg)}
+.tolearn .learn-list{padding-bottom:12px}
+.learn-list{list-style:none;display:flex;flex-direction:column;gap:7px;font-size:14.5px;line-height:1.4}
+.learn-list li{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding-left:14px;position:relative}
+.learn-list li::before{content:"";position:absolute;left:2px;top:.55em;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+.learn-list small{color:var(--muted);font-size:12.5px;white-space:nowrap;flex:none}
+.minor-h{font-size:13px;font-weight:600;color:var(--muted);margin-top:4px}
+.minor-list{padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:13.5px;color:var(--muted);line-height:1.45}
+.kicker.ok-t{color:var(--good);display:flex;align-items:center;gap:6px}
+.kicker.ok-t svg{width:16px;height:16px;stroke-width:2.6}
+.form-list{list-style:none;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px}
+.form-list .gr{font-size:19px;font-weight:700}
+.form-list small{color:var(--muted)}
+.ch-row .st{font-size:12.5px;font-weight:600;color:var(--muted);white-space:nowrap;display:flex;align-items:center;gap:4px;flex:none}
+.ch-row .st svg{width:15px;height:15px;stroke-width:2.6}
+.ch-row .st.passed{color:var(--good)}
+.ch-row .st.current{background:var(--accent);color:var(--on-accent);border-radius:999px;padding:3px 10px}
+.ch-row.current{background:var(--soft)}
+.ch-row.current .num{background:var(--accent);color:var(--on-accent)}
+.ch-row.ahead .tt b{color:var(--muted);font-weight:500}
+/* карточка формы: вопрос на лицевой стороне, ответ и строка глагола на обороте */
+.face .root{font-size:14px;color:var(--muted);margin-top:10px}
+.face .root .gr{font-size:18px;color:var(--ink)}
+.face .fq{margin-top:16px;font-weight:600;font-size:16px;color:var(--accent);background:var(--soft);border-radius:999px;padding:6px 14px}
+.wru.lg{font-size:1.9rem;margin-top:0}
+.fb-q{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;text-align:center;padding:0 60px}
+.fb-ans{font-size:clamp(2.2rem,10vw,3.2rem);font-weight:700;text-align:center;line-height:1.15;color:var(--accent);overflow-wrap:anywhere}
+.fb-line{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px}
+.fl{display:flex;flex-direction:column;align-items:center;gap:1px;padding:5px 9px;border-radius:12px;border:1px solid var(--line);background:var(--bg);min-width:0}
+.fl small{font-size:11px;color:var(--muted)}
+.fl .gr{font-size:15px;color:var(--muted)}
+.fl em{font-style:normal;font-size:10.5px;color:var(--muted)}
+.fl.bold{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.fl.bold .gr{font-size:19px;font-weight:700;color:var(--accent)}
+.fl.bold em{color:var(--accent);font-weight:600}
+.fl.cur{background:var(--soft)}
+.fb-notes{border-top:1px solid var(--line);padding-top:4px}
+.fb-notes summary{list-style:none;display:flex;align-items:center;gap:6px;min-height:40px;cursor:pointer;font-weight:600;font-size:14px}
+.fb-notes summary::-webkit-details-marker{display:none}
+.fb-notes summary .chev{width:16px;height:16px;color:var(--muted);transition:transform .2s;margin-left:auto}
+.fb-notes[open] summary .chev{transform:rotate(90deg)}
+.fb-notes .pp-notes{padding-bottom:6px}
+.pp-table td.off{opacity:.38}
+.pp-table td.none{color:var(--muted)}
+.pp-table tr.focus{background:var(--soft)}
+#p-table{display:flex;flex-direction:column;gap:10px}

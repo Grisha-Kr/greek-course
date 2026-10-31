@@ -6,17 +6,19 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 
 /* ---------- Справочники ---------- */
 // LETTERS (data/letters.js), WORDS и SPECIAL (data/words.js), PARTS и CHAPTERS (data/chapters.js),
-// DICT (data/dictionary.js, словарь учебника) и VERBS (data/parts.js, основные формы) подключены отдельными файлами
+// DICT (data/dictionary.js, словарь учебника), VERBS (data/parts.js, основные формы) и карта курса
+// COURSE, PP_OPEN, PP_EX, PP_NAME, PP_VERB_CH, COURSE_END (data/course.js) подключены отдельными файлами
 const INT = [0, 1, 3, 7, 14, 30, 60]; // интервалы повторения по ступеням 0–6, дней
 const NEW = 10;      // новых слов за сессию и в плане на день (и ещё до 10 добавленных вручную)
-const NEW_PARTS = 5; // новых глаголов основных форм в плане на день
+const NEW_PARTS = 5; // новых полужирных основных форм в плане на день
 const QUIZ_N = 20;   // вопросов в тесте слов и основных форм
 const SURE = 4;      // с этой ступени (интервал от двух недель) слово «уверенно»
 const NT_WORDS = 138167; // слов в тексте Нового Завета (учебник, конец главы 8)
-const PBN = {words:'word_progress', letters:'letter_progress', plans:'plan_days', parts:'parts_progress', added:'word_added'};
+// forms: прогресс полужирных основных форм (form_progress, номер = глагол × 10 + форма). Старая parts_progress (этап 2) не загружается
+const PBN = {words:'word_progress', letters:'letter_progress', plans:'plan_days', forms:'form_progress', added:'word_added'};
 const KEYS = Object.keys(PBN);
-const FIELDS = {words:['n','level','due','hard'], letters:['n','known','hard'], plans:['date','tasks','done'], parts:['n','level','due','hard'], added:['n']};
-const MATCH = {words:'n', letters:'n', plans:'date', parts:'n', added:'n'}; // по какому полю запись единственная у пользователя
+const FIELDS = {words:['n','level','due','hard'], letters:['n','known','hard'], plans:['date','tasks','done'], forms:['n','level','due','hard'], added:['n']};
+const MATCH = {words:'n', letters:'n', plans:'date', forms:'n', added:'n'}; // по какому полю запись единственная у пользователя
 // Все слова: лексический минимум (как в главах, номера 1–320) и остальные статьи словаря (номера с 321).
 // Частотность и часть речи у всех слов из словаря; d: статья словаря (у εἰ μή её нет)
 const DICTN = new Map(DICT.map(d => [d.n, d]));
@@ -36,10 +38,25 @@ function fullList(){
 }
 const VERB = new Map(VERBS.map(v => [v.n, v]));
 const VERB_OF = new Map(VERBS.map(v => [v.d, v])); // номер слова → глагол основных форм
-const VERBS_BY_FREQ = VERBS.slice().sort((a, b) => ((WORD.get(b.d) || {}).f || 0) - ((WORD.get(a.d) || {}).f || 0) || a.n - b.n);
+const vFreq = v => (WORD.get(v.d) || {}).f || 0;
 const CHS = [...new Set(MINW.map(w => w.ch))];
 const chapter = n => CHAPTERS.find(c => c.n === n);
+const courseOf = n => COURSE.find(c => c.n === n);
 const chWords = ch => MINW.filter(w => w.ch === ch);
+// Основные формы по учебнику: форма открывается в главе, где учебник вводит это время (PP_OPEN, исключения PP_EX),
+// глагол входит в раздел вместе с главой, где он есть в лексическом минимуме (два глагола вне минимума: PP_VERB_CH).
+// FORMS: все формы, которые есть в таблице книги; n = номер глагола × 10 + номер формы; ch: глава, с которой форма открыта
+const verbCh = v => PP_VERB_CH[v.n] || (v.d <= 320 && WORD.get(v.d) ? WORD.get(v.d).ch : COURSE_END);
+const formOf = (v, i) => i ? v.f[i - 1] : v.v;
+const FORMS = [];
+VERBS.forEach(v => [v.v].concat(v.f).forEach((g, i) => {
+  if(g === '–') return;
+  FORMS.push({v, i, n: v.n * 10 + i, g, bold: (v.b || []).includes(i), ch: Math.max(verbCh(v), PP_EX[v.n + ':' + i] || PP_OPEN[i])});
+}));
+const FORM = new Map(FORMS.map(f => [f.n, f]));
+// Полужирные формы (их автор велит заучить, с. 412–413) в порядке открытия: по главам, затем от частых глаголов к редким
+const BOLD = FORMS.filter(f => f.bold).sort((a, b) => a.ch - b.ch || vFreq(b.v) - vFreq(a.v) || a.n - b.n);
+const vForms = v => FORMS.filter(f => f.v === v);
 
 /* ---------- Значки ---------- */
 const svg = (d, cls) => `<svg viewBox="0 0 24 24" aria-hidden="true"${cls ? ` class="${cls}"` : ''}>${d}</svg>`;
@@ -60,8 +77,8 @@ const ICON = {
 };
 
 /* ---------- Состояние ---------- */
-const S = {words:[], letters:[], plans:[], parts:[], added:[], invites:[], loaded:false};
-const WP = new Map(), LP = new Map(), PP = new Map(), AD = new Map(); // прогресс по номеру слова, буквы и глагола; добавленные слова
+const S = {words:[], letters:[], plans:[], forms:[], added:[], invites:[], loaded:false};
+const WP = new Map(), LP = new Map(), FP = new Map(), AD = new Map(); // прогресс по номеру слова, буквы и формы; добавленные слова
 const loadLS = (k, d) => { try { const v = localStorage.getItem('gk_'+k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } };
 const saveLS = (k, v) => { try { localStorage.setItem('gk_'+k, JSON.stringify(v)); } catch(e){} };
 const UI = {hops:0, shown:'', day:'', folds: new Set()};
@@ -104,7 +121,6 @@ const weekStart = () => addDays(todayISO(), -monIndex(new Date())); // поне�
 const longDate = () => { const d = new Date(); return `${WDF[d.getDay()]}, ${d.getDate()} ${MONF[d.getMonth()]}`; };
 const fmtDay = iso => { if(!iso) return ''; const [y,m,d] = iso.split('-').map(Number); return d + ' ' + MONF[m-1] + (y !== new Date().getFullYear() ? ' ' + y : ''); };
 const plural = (n, f) => { n = Math.abs(n) % 100; const n1 = n % 10; if(n > 10 && n < 20) return f[2]; if(n1 > 1 && n1 < 5) return f[1]; if(n1 === 1) return f[0]; return f[2]; };
-const VERBS_F = ['глагол','глагола','глаголов'];
 const WORDS_F = ['слово','слова','слов'], CH_F = ['глава','главы','глав'], DAYS_F = ['день','дня','дней'], LET_F = ['буква','буквы','букв'];
 const shuffle = a => { a = [...a]; for(let i = a.length - 1; i > 0; i--){ const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 // «ἄγγελος, -ου, ὁ» → ['ἄγγελος', '-ου, ὁ']
@@ -129,17 +145,17 @@ function wordCounts(list){
   (list || MINW).forEach(w => c[wState(w.n)]++);
   return c;
 }
-// Основные формы: те же состояния и тот же порядок повторения, прогресс в parts_progress
-const pRec = n => PP.get(n);
-function pState(n){ const r = pRec(n); if(!r) return 'new'; if(r.hard) return 'hard'; return (r.level || 0) >= SURE ? 'sure' : 'learn'; }
-const isPDue = n => { const r = pRec(n); return !!r && r.due <= today(); };
+// Полужирные основные формы: те же состояния и тот же порядок повторения, прогресс в form_progress
+const fRec = n => FP.get(n);
+function fState(n){ const r = fRec(n); if(!r) return 'new'; if(r.hard) return 'hard'; return (r.level || 0) >= SURE ? 'sure' : 'learn'; }
+const isFDue = n => { const r = fRec(n); return !!r && r.due <= today(); };
 const isAdded = n => AD.has(n);
 // Доля текста НЗ: сумма частотности выученных слов, делённая на число слов НЗ
 const coverage = () => LEX.reduce((a, w) => a + (isLearned(w.n) ? w.f : 0), 0);
 function reindex(key){
   if(key === 'words'){ WP.clear(); S.words.forEach(r => WP.set(r.n, r)); }
   if(key === 'letters'){ LP.clear(); S.letters.forEach(r => LP.set(r.n, r)); }
-  if(key === 'parts'){ PP.clear(); S.parts.forEach(r => PP.set(r.n, r)); }
+  if(key === 'forms'){ FP.clear(); S.forms.forEach(r => FP.set(r.n, r)); }
   if(key === 'added'){ AD.clear(); S.added.forEach(r => AD.set(r.n, r)); }
 }
 // Ответ «Знаю» или «Повторить» (ошибка в тесте): изменения записи прогресса слова или глагола.
@@ -152,19 +168,45 @@ function srsPatch(s, failed, ok){
   return s.hard ? {hard: false} : null;
 }
 
-/* ---------- Главы: что пройдено ---------- */
-// Глава со словами пройдена, когда все её слова начаты; глава 3, когда все 24 буквы отмечены «знаю».
-// Главы без заданий (1, 2 и главы без слов) пройдены вместе с предыдущей главой с заданиями, главы 1–2 вместе с главой 3.
-function chapterDone(n){
-  if(n === 3) return lettersKnown() === LETTERS.length;
-  if(n < 3) return chapterDone(3);
-  const ws = chWords(n);
-  if(ws.length) return ws.every(w => wRec(w.n));
-  return chapterDone(n - 1);
+/* ---------- Текущая глава ---------- */
+// Курс идёт по учебнику: текущая глава хранится в users.chapter (1–36, после окончания курса 37).
+// Глава закрывается только кнопкой «Глава пройдена», вернуться можно кнопкой «Сделать текущей».
+// Без связи новая глава запоминается на устройстве (gk_chapter_<id>) и отправляется, когда связь вернётся
+let CHP = 0;
+const chKey = () => 'chapter_' + me().id;
+const curCh = () => Math.min(Math.max((CHP || me().chapter || 1) | 0, 1), COURSE_END);
+// Глава известна: в записи пользователя есть поле chapter (без связи после обновления может остаться старая запись)
+const chKnown = () => !!CHP || me().chapter !== undefined;
+const passedCount = () => Math.min(curCh() - 1, CHAPTERS.length);
+const chStatus = n => n < curCh() ? 'passed' : n === curCh() ? 'current' : 'ahead';
+const isOpen = f => f.ch <= curCh();
+const openBold = () => BOLD.filter(isOpen);
+// Слова, из которых план берёт новые: лексический минимум глав до текущей по порядку учебника;
+// после главы 36 ещё не начатые слова минимума, затем остальной словарь от частых слов к редким
+let PW = null;
+function planWords(){
+  const c = curCh();
+  if(!PW || PW.c !== c) PW = {c, list: c > 36 ? MINW.concat(BY_FREQ.filter(w => !w.min)) : MINW.filter(w => w.ch <= c)};
+  return PW.list;
 }
-const hasTasks = n => n === 3 || chWords(n).length > 0;
-const passedCount = () => CHAPTERS.filter(c => chapterDone(c.n)).length;
-const currentChapter = () => CHAPTERS.find(c => hasTasks(c.n) && !chapterDone(c.n)) || CHAPTERS[CHAPTERS.length - 1];
+function setChapter(n){
+  CHP = n; saveLS(chKey(), n);
+  pushChapter();
+  afterChapterChange();
+  render(true);
+}
+async function pushChapter(){
+  if(!CHP || !pb.authStore.isValid) return;
+  const n = CHP;
+  try {
+    const r = await pb.collection('users').update(me().id, {chapter: n});
+    pb.authStore.save(pb.authStore.token, r);
+    if(CHP === n){ CHP = 0; saveLS(chKey(), null); }
+    schedule();
+  } catch(e){
+    if(e && e.status){ CHP = 0; saveLS(chKey(), null); toast('Не удалось сохранить главу: ' + errText(e)); render(true); }
+  }
+}
 
 /* ---------- Сохранение: сразу на экране, на сервер через очередь (работает и без интернета) ---------- */
 const ID_ABC = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -197,8 +239,8 @@ async function flush(){
   flushing = true;
   try {
     for(const qk of Object.keys(Q)){
-      const q = Q[qk], rec = findLocal(q.key, q.val);
-      if(!rec){ delete Q[qk]; continue; }
+      const q = Q[qk], rec = PBN[q.key] && findLocal(q.key, q.val);
+      if(!rec){ delete Q[qk]; continue; } // в том числе записи старой parts_progress, оставшиеся с этапа 2
       const c = pb.collection(PBN[q.key]), data = pick(q.key, rec);
       try {
         let saved;
@@ -280,40 +322,37 @@ async function subscribeAll(){
 }
 const setWord = (n, patch) => saveRec('words', n, patch);
 const setLetter = (n, patch) => saveRec('letters', n, patch);
-const setPart = (n, patch) => saveRec('parts', n, patch);
+const setForm = (n, patch) => saveRec('forms', n, patch);
 
 /* ---------- План на сегодня ---------- */
-// Задания: review: слова с подошедшим сроком, new: следующие 10 новых слов (по главам или по частоте) и до 10 слов,
-// добавленных из словаря вручную, parts: 5 новых глаголов основных форм и глаголы со сроком,
-// alphabet: карточки трудных и ещё не выученных букв. План составляется при первом открытии дня и хранится в plan_days.
+// Задания: review: слова с подошедшим сроком из любых глав; new: 10 новых слов лексического минимума глав до текущей
+// по порядку учебника и до 10 слов, добавленных из словаря вручную; parts: до 5 новых полужирных основных форм открытых
+// времён и формы со сроком; alphabet: трудные и невыученные буквы, с главы 3. План составляется при первом открытии дня
+// и хранится в plan_days. У заданий new и parts есть ch: глава, для которой они составлены
 const TASK_ORDER = ['review', 'new', 'parts', 'alphabet'];
 const todayPlan = () => S.plans.find(p => p.date === today());
-const planOrder = () => me().plan_order === 'freq' ? 'freq' : 'chapters';
 const partsOn = () => !me().parts_off;
-// Очередь новых слов: «по главам»: сначала минимум по порядку учебника, потом остальной словарь от частых слов к редким;
-// «по частоте»: весь словарь от частых к редким. Начатые слова пропускаются
-let ORDER = null;
-const orderList = k => { ORDER = ORDER || {chapters: MINW.concat(BY_FREQ.filter(w => !w.min)), freq: BY_FREQ}; return ORDER[k]; };
 const addedWaiting = () => S.added.slice().sort((a, b) => String(a.created).localeCompare(String(b.created))).map(r => WORD.get(r.n)).filter(w => w && !wRec(w.n));
 function nextNew(){
   const mine = addedWaiting().slice(0, NEW);
-  const next = orderList(planOrder()).filter(w => !wRec(w.n) && !mine.includes(w)).slice(0, NEW);
+  const next = planWords().filter(w => !wRec(w.n) && !mine.includes(w)).slice(0, NEW);
   return next.concat(mine).map(w => w.n);
 }
 function partsTask(){
   if(!partsOn()) return null;
-  const verbs = VERBS_BY_FREQ.filter(v => !pRec(v.n)).slice(0, NEW_PARTS).map(v => v.n);
-  const due = VERBS.filter(v => isPDue(v.n)).length;
-  return verbs.length || due ? {key: 'parts', verbs, count: due, done: false} : null;
+  const forms = openBold().filter(f => !fRec(f.n)).slice(0, NEW_PARTS).map(f => f.n);
+  const due = BOLD.filter(f => isFDue(f.n)).length;
+  return forms.length || due ? {key: 'parts', forms, count: due, ch: curCh(), done: false} : null;
 }
+const lettersLeft = () => LETTERS.filter(L => { const r = lRec(L.n); return !r || !r.known || r.hard; });
 function taskDeck(t){
   if(t.key === 'review') return LEX.filter(w => isDue(w.n));
   if(t.key === 'new') return (t.words || []).map(n => WORD.get(n)).filter(w => w && (!wRec(w.n) || isDue(w.n)));
   if(t.key === 'parts'){
-    const fresh = (t.verbs || []).map(n => VERB.get(n)).filter(v => v && !pRec(v.n));
-    return VERBS.filter(v => isPDue(v.n)).concat(fresh);
+    const fresh = (t.forms || []).map(n => FORM.get(n)).filter(f => f && !fRec(f.n));
+    return BOLD.filter(f => isFDue(f.n)).concat(fresh);
   }
-  if(t.key === 'alphabet') return LETTERS.filter(L => { const r = lRec(L.n); return !r || !r.known || r.hard; });
+  if(t.key === 'alphabet') return lettersLeft();
   return [];
 }
 function buildPlan(){
@@ -321,34 +360,57 @@ function buildPlan(){
   const due = taskDeck({key: 'review'}).length;
   if(due) tasks.push({key: 'review', count: due, done: false});
   const next = nextNew();
-  if(next.length) tasks.push({key: 'new', words: next, done: false});
+  if(next.length) tasks.push({key: 'new', words: next, ch: curCh(), done: false});
   const pt = partsTask();
   if(pt) tasks.push(pt);
-  const abc = taskDeck({key: 'alphabet'}).length;
-  if(abc) tasks.push({key: 'alphabet', count: abc, done: false});
+  const abc = lettersLeft().length;
+  if(abc && curCh() >= 3) tasks.push({key: 'alphabet', count: abc, done: false});
   return tasks;
 }
-// Составить план на сегодня, если его ещё нет; отметить задания, которые уже нечего делать.
-// Невыполненный план, составленный до этапа 2, получает задание основных форм, если для него есть глаголы
+// Привести сегодняшний план в соответствие с текущей главой. Ещё не начатые задания new и parts, составленные
+// для другой главы (или старым приложением), пересобираются; алфавит до главы 3 убирается.
+// add: добавить недостающие задания (после нажатия «Глава пройдена» или «Сделать текущей»), если план ещё не выполнен
+function fitPlan(tasks, add){
+  const ch = curCh(), out = tasks.slice();
+  let changed = false;
+  const i = out.findIndex(t => t.key === 'new'), t = out[i];
+  if(i >= 0 ? !t.done && t.ch !== ch && !(t.words || []).some(n => wRec(n)) : add){
+    const next = nextNew();
+    if(i >= 0){ if(next.length) out[i] = {...t, words: next, ch}; else out.splice(i, 1); changed = true; }
+    else if(next.length){ out.push({key: 'new', words: next, ch, done: false}); changed = true; }
+  }
+  const j = out.findIndex(t => t.key === 'parts'), pt0 = out[j];
+  if(j >= 0 ? !pt0.done && (pt0.verbs || (pt0.ch !== ch && !(pt0.forms || []).some(n => fRec(n)))) : add && partsOn()){
+    const pt = partsTask();
+    if(j >= 0){ if(pt) out[j] = pt; else out.splice(j, 1); changed = true; }
+    else if(pt){ out.push(pt); changed = true; }
+  }
+  const k = out.findIndex(t => t.key === 'alphabet');
+  if(k >= 0 && !out[k].done && ch < 3){ out.splice(k, 1); changed = true; }
+  if(k < 0 && add && ch >= 3){ const n = lettersLeft().length; if(n){ out.push({key: 'alphabet', count: n, done: false}); changed = true; } }
+  return changed ? out : null;
+}
+// Составить план на сегодня, если его ещё нет; согласовать с текущей главой; отметить задания, которые уже нечего делать
 function checkPlan(){
-  if(!UI.ready || !pb.authStore.isValid) return;
+  if(!UI.ready || !pb.authStore.isValid || !chKnown()) return;
   const p = todayPlan();
   if(!p){ const tasks = buildPlan(); saveRec('plans', today(), {tasks, done: tasks.length === 0}); return; }
-  let tasks = p.tasks || [], changed = false;
-  if(!p.done && !tasks.some(t => t.key === 'parts')){ const pt = partsTask(); if(pt){ tasks = tasks.concat(pt); changed = true; } }
+  let tasks = fitPlan(p.tasks || [], false), changed = !!tasks;
+  tasks = tasks || p.tasks || [];
   if(tasks.some(t => !t.done && !taskDeck(t).length)){ tasks = tasks.map(t => !t.done && !taskDeck(t).length ? {...t, done: true} : t); changed = true; }
   if(changed) saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
 }
-// Настройки плана поменялись: новые слова и основные формы на сегодня пересобираются, если задание ещё не начато
+// Глава сменилась: ещё не начатые задания пересобираются; недостающие задания появляются сегодня, если план не выполнен
+function afterChapterChange(){
+  const p = todayPlan(); if(!p || !UI.ready) return;
+  const add = !p.done || !(p.tasks || []).length;
+  const tasks = fitPlan(p.tasks || [], add);
+  if(tasks) saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
+}
+// Выключатель основных форм в профиле: задание убирается, если не сделано, или добавляется
 function replanToday(){
   const p = todayPlan(); if(!p) return;
-  let tasks = (p.tasks || []).slice();
-  const i = tasks.findIndex(t => t.key === 'new');
-  if(i < 0 || (!tasks[i].done && !(tasks[i].words || []).some(n => wRec(n)))){
-    const next = nextNew();
-    if(i >= 0) tasks.splice(i, 1);
-    if(next.length) tasks.push({key: 'new', words: next, done: false});
-  }
+  const tasks = (p.tasks || []).slice();
   const j = tasks.findIndex(t => t.key === 'parts');
   if(!partsOn() && j >= 0 && !tasks[j].done) tasks.splice(j, 1);
   if(partsOn() && j < 0){ const pt = partsTask(); if(pt) tasks.push(pt); }
@@ -360,7 +422,7 @@ function addToStudy(n){
   saveRec('added', n, {});
   const p = todayPlan(), t = p && (p.tasks || []).find(x => x.key === 'new');
   if(t && t.done) return 'tomorrow';
-  const tasks = (p ? p.tasks || [] : []).filter(x => x.key !== 'new').concat({...(t || {key: 'new', done: false}), words: ((t && t.words) || []).filter(x => x !== n).concat(n)});
+  const tasks = (p ? p.tasks || [] : []).filter(x => x.key !== 'new').concat({...(t || {key: 'new', ch: curCh(), done: false}), words: ((t && t.words) || []).filter(x => x !== n).concat(n)});
   if(p) saveRec('plans', today(), {tasks, done: false});
   return 'today';
 }
@@ -374,21 +436,20 @@ function chRange(ws){
   const chs = [...new Set(ws.map(w => w.ch))].sort((a, b) => a - b);
   return chs.length === 1 ? `глава ${chs[0]}` : `главы ${chs[0]}–${chs[chs.length - 1]}`;
 }
-// Подпись задания «Новые слова»: главы, если слова идут по порядку учебника; иначе откуда слова
+// Подпись задания «Новые слова»: главы минимума; после курса слова из словаря; отдельно добавленные вручную
 function newInfo(ns){
   const ws = ns.map(n => WORD.get(n)).filter(Boolean), my = ws.filter(w => isAdded(w.n)), rest = ws.filter(w => !isAdded(w.n));
-  const freq = planOrder() === 'freq';
-  const range = !freq && rest.length && rest.every(w => w.min) ? chRange(rest) : '';
+  const range = rest.length && rest.every(w => w.min) ? chRange(rest) : '';
   const sub = [];
-  if(rest.length && !range) sub.push(freq ? 'по частоте' : 'из словаря, от частых к редким');
+  if(rest.length && !range) sub.push('из словаря, от частых к редким');
   if(my.length) sub.push(`добавленные вами: ${my.length}`);
   return {range, sub: sub.join(', ')};
 }
 function taskInfo(t){
-  const n = t.done ? (t.count || (t.words || []).length || (t.verbs || []).length) : t.key === 'new' ? (t.words || []).length : taskDeck(t).length;
+  const n = t.done ? (t.count || (t.words || []).length || (t.forms || t.verbs || []).length) : t.key === 'new' ? (t.words || []).length : taskDeck(t).length;
   if(t.key === 'review') return {title: `Слова к повторению · ${n}`, min: Math.max(1, Math.ceil(n * 8 / 60)), href: '#/task/review'};
   if(t.key === 'new'){ const r = newInfo(t.words || []); return {title: `Новые слова${r.range ? ', ' + r.range : ''} · ${n}`, sub: r.sub, min: Math.max(2, Math.ceil(n * 25 / 60)), href: '#/task/new'}; }
-  if(t.key === 'parts'){ const fresh = (t.verbs || []).filter(x => !pRec(x)).length; return {title: `Основные формы · ${n}`, sub: t.done ? '' : [fresh ? `новых глаголов: ${fresh}` : '', n - fresh > 0 ? `повторить: ${n - fresh}` : ''].filter(Boolean).join(', '), min: Math.max(2, Math.ceil(n * 20 / 60)), href: '#/task/parts'}; }
+  if(t.key === 'parts'){ const fresh = (t.forms || []).filter(x => !fRec(x)).length; return {title: `Основные формы · ${n}`, sub: t.done ? '' : [fresh ? `новых форм: ${fresh}` : '', n - fresh > 0 ? `повторить: ${n - fresh}` : ''].filter(Boolean).join(', '), min: Math.max(1, Math.ceil(n * 12 / 60)), href: '#/task/parts'}; }
   return {title: 'Алфавит', sub: `трудные и невыученные: ${n} ${plural(n, LET_F)}`, min: Math.max(2, Math.ceil(n * 8 / 60)), href: '#/task/alphabet'};
 }
 // День в календаре: full: план выполнен полностью, half: сделано хотя бы одно задание, '': занятий не было
@@ -421,6 +482,7 @@ async function startApp(){
   $('#auth').hidden = true; $('#app').hidden = false;
   themeFromUser();
   Q = loadLS(qKey(), {});
+  CHP = +loadLS(chKey(), 0) || 0;
   UI.day = today();
   // сначала то, что сохранено на устройстве: приложение открывается и без интернета
   if(loadCache()) S.loaded = true;
@@ -429,7 +491,7 @@ async function startApp(){
     await loadAll();
     S.loaded = true; UI.ready = true; $('#notice').hidden = true; render(true);
     if(route().name === 'profile') loadProfileExtras();
-    flush();
+    flush(); pushChapter();
     subscribeAll().catch(() => {});
   } catch(e){
     // без связи план составляется по прогрессу, сохранённому на устройстве
@@ -448,9 +510,9 @@ setInterval(checkDay, 30e3);
 document.addEventListener('visibilitychange', () => {
   if(document.visibilityState !== 'visible') return;
   checkUpdate(); checkDay();
-  if(S.loaded && pb.authStore.isValid){ flush(); loadAll().catch(() => {}); }
+  if(S.loaded && pb.authStore.isValid){ flush(); pushChapter(); loadAll().catch(() => {}); }
 });
-window.addEventListener('online', () => { $('#notice').hidden = true; if(S.loaded){ flush(); loadAll().catch(() => {}); } });
+window.addEventListener('online', () => { $('#notice').hidden = true; if(S.loaded){ flush(); pushChapter(); loadAll().catch(() => {}); } });
 window.addEventListener('offline', () => showNotice('Нет подключения к интернету. Прогресс сохранится на устройстве и отправится, когда связь вернётся.'));
 
 /* ---------- Проверка новой версии ---------- */
@@ -526,7 +588,9 @@ function vHome(){
   const left = tasks.filter(t => !t.done).reduce((a, t) => a + taskInfo(t).min, 0);
   const st = streak();
   let planCard;
-  if(!tasks.length) planCard = `<section class="card plan"><h2>План на сегодня</h2><p class="lead">На сегодня заданий нет: все слова и буквы пройдены, повторять пока нечего. Загляните завтра.</p></section>`;
+  if(!tasks.length) planCard = `<section class="card plan"><h2>План на сегодня</h2><p class="lead">${curCh() < 3
+      ? 'Заданий пока нет: в первых главах заучивать нечего. Прочитайте главу и нажмите «Глава пройдена».'
+      : 'На сегодня заданий нет: повторять нечего, новые слова пройденных глав начаты. Загляните завтра.'}</p></section>`;
   else planCard = `<section class="card plan">
       <div class="plan-top"><h2>План на сегодня</h2><span class="muted">${done} из ${tasks.length}</span></div>
       <div class="segs" aria-hidden="true">${tasks.map(t => `<i class="${t.done ? 'on' : ''}"></i>`).join('')}</div>
@@ -538,18 +602,65 @@ function vHome(){
           <span class="tt"><b>${esc(i.title)}</b>${i.sub && !t.done ? `<small>${esc(i.sub)}</small>` : ''}</span>
           <span class="tm">${t.done ? 'сделано' : i.min + ' мин'}</span></a></li>`; }).join('')}</ol>
     </section>`;
-  return `${head('Сегодня', longDate())}<div class="cols"><div class="col">${planCard}</div><div class="col">${chapterCard()}</div></div>`;
+  return `${head('Сегодня', longDate())}<div class="cols"><div class="col">${chapterNow()}${planCard}</div><div class="col">${courseMeters()}</div></div>`;
 }
-function chapterCard(){
-  const c = currentChapter(), passed = passedCount(), learned = MINW.filter(w => isLearned(w.n)).length;
-  const href = c.n === 3 ? '#/abc' : '#/ch/' + c.n;
+// «с. 154–163», «с. 69–72; обзор № 4: с. 89–92»
+const pgs = r => r[0] === r[1] ? `с. ${r[0]}` : `с. ${r[0]}–${r[1]}`;
+const tbText = c => `Учебник: ${pgs(c.tb)}`;
+const wbText = c => c.wb.length ? `Тетрадь: ${c.wb.map(r => (r[2] ? r[2].toLowerCase() + ', ' : '') + pgs(r)).join('; ')}` : 'В тетради упражнений нет';
+const learnList = c => `<ul class="learn-list">${c.learn.map(([t, pg]) => `<li><span>${esc(t)}</span><small>с. ${esc(pg)}</small></li>`).join('')}</ul>`;
+// Подсказка в карточке текущей главы: что осталось сделать до кнопки «Глава пройдена»
+function chapterHint(n){
+  const ws = chWords(n);
+  if(n === 3){ const k = lettersKnown(); return k < LETTERS.length ? `Алфавит в плане, пока не выучены все буквы: знаю ${k} из ${LETTERS.length}.` : 'Все буквы выучены. Когда прочитаете главу, нажмите «Глава пройдена».'; }
+  if(ws.length){
+    const left = planWords().filter(w => !wRec(w.n)).length, own = ws.filter(w => !wRec(w.n)).length;
+    if(!left) return 'Слова главы начаты. Когда прочитаете главу, нажмите «Глава пройдена».';
+    return `Слова главы приходят в новых словах плана, по ${NEW} в день: не начато ${own} из ${ws.length}${left > own ? `, из прошлых глав ещё ${left - own}` : ''}.`;
+  }
+  return 'В этой главе нет слов лексического минимума. Когда прочитаете главу, нажмите «Глава пройдена».';
+}
+function chapterNow(){
+  const n = curCh();
+  if(n > 36) return `<section class="card chap-now"><span class="kicker">Курс</span><h2>Учебник пройден</h2>
+    <p class="lead">Все 36 глав пройдены. Новые слова теперь приходят из словаря учебника, от частых слов к редким.</p>
+    <a class="btn" href="#/course">Открыть курс</a></section>`;
+  const c = chapter(n), k = courseOf(n);
+  return `<section class="card chap-now">
+    <span class="kicker">Текущая глава</span>
+    <a class="chap-link" href="#/ch/${n}"><h2>Глава ${n}</h2><span>${esc(c.t)}</span></a>
+    <p class="pages">${tbText(k)}<br>${wbText(k)}</p>
+    ${k.learn.length ? `<details class="tolearn" data-fold="learn"${UI.folds.has('learn') ? ' open' : ''}><summary><span>Заучить в этой главе <span class="muted">· ${k.learn.length}</span></span>${ICON.chev}</summary>${learnList(k)}</details>`
+      : '<p class="hint">В этой главе автор не просит ничего заучивать.</p>'}
+    <p class="hint">${esc(chapterHint(n))}</p>
+    <button type="button" class="btn primary" data-act="pass">${ICON.check}Глава пройдена</button>
+  </section>`;
+}
+function courseMeters(){
+  const passed = passedCount(), learned = MINW.filter(w => isLearned(w.n)).length;
   return `<section class="card chap-card">
-    <span class="kicker">Сейчас</span>
-    <a class="chap-link" href="${href}"><h2>Глава ${c.n}</h2><span>${esc(c.t)}</span></a>
     <div class="meter"><div class="meter-t"><span>Курс</span><b>${passed} ${plural(passed, CH_F)} из ${CHAPTERS.length}</b></div>${bar(passed, CHAPTERS.length)}</div>
     <div class="meter"><div class="meter-t"><span>Слова минимума</span><b>${learned} из ${MINW.length}</b></div>${bar(learned, MINW.length, 'good')}</div>
     <div class="meter"><div class="meter-t"><span>Текст Нового Завета</span><b>${pctNT()}</b></div>${bar(coverage(), NT_WORDS, 'good')}</div>
   </section>`;
+}
+// «Глава пройдена»: окно подтверждения; незаконченное никуда не пропадает
+function passChapter(){
+  const n = curCh(); if(n > 36) return;
+  const notes = [];
+  if(n === 3 && lettersKnown() < LETTERS.length) notes.push('Ещё не все буквы отмечены «знаю». Алфавит останется в плане, пока вы их не выучите.');
+  const own = chWords(n).filter(w => !wRec(w.n)).length;
+  if(own) notes.push(`Ещё не начаты ${own} ${plural(own, WORDS_F)} этой главы. Они никуда не пропадут: придут в новых словах раньше слов следующей главы.`);
+  const p = todayPlan(), t = p && (p.tasks || []).find(x => x.key === 'new');
+  if(n < 36 && chWords(n + 1).length && t && (t.done || (t.words || []).some(x => wRec(x)))) notes.push('Новые слова на сегодня уже начаты, слова следующей главы придут в плане завтра. Начать их сразу можно на экране главы.');
+  const next = n < 36 ? `Текущей станет глава ${n + 1}: ${chapter(n + 1).t}.` : 'Это последняя глава. После неё новые слова пойдут из словаря, от частых к редким.';
+  openForm({title: `Глава ${n} пройдена?`, text: [next].concat(notes).join(' '), submit: 'Глава пройдена',
+    async onSave(){ setChapter(n + 1); toast(n < 36 ? `Текущая глава: ${n + 1}` : 'Учебник пройден'); }});
+}
+// «Сделать текущей» у пройденной главы: прогресс не стирается
+function makeCurrent(n){
+  openForm({title: `Вернуться к главе ${n}?`, text: `Глава ${n} снова станет текущей. Прогресс не сотрётся: начатые слова и формы остаются в повторении. Новые слова и формы будут приходить только из глав до ${n}-й включительно.`, submit: 'Сделать текущей',
+    async onSave(){ setChapter(n); toast(`Текущая глава: ${n}`); }});
 }
 
 /* ---------- Задание плана ---------- */
@@ -558,8 +669,8 @@ function vTask(r){
   if(!t) return `${subHead('#/', 'Сегодня', 'Задание')}<section class="card"><p>Этого задания сегодня нет в плане.</p><a class="btn" href="#/">К плану</a></section>`;
   const i = taskInfo(t);
   if(t.key === 'alphabet') return `${subHead('#/', 'Сегодня', 'Алфавит', 'Карточки трудных и ещё не выученных букв')}<div class="trainer">${abcCardsHTML(true)}</div>`;
-  if(t.key === 'parts') return `${subHead('#/', 'Сегодня', 'Основные формы', 'Новые глаголы и глаголы, у которых подошёл срок повторения')}<div class="trainer">${pCardsHTML(true)}</div>`;
-  return `${subHead('#/', 'Сегодня', esc(i.title.replace(/ · \d+$/, '')), t.key === 'new' ? (i.sub ? 'Новые слова ' + esc(i.sub) : 'Новые слова по порядку учебника') : 'Слова, у которых подошёл срок повторения')}<div class="trainer">${wCardsHTML(true)}</div>`;
+  if(t.key === 'parts') return `${subHead('#/', 'Сегодня', 'Основные формы', 'Новые полужирные формы и формы, у которых подошёл срок повторения')}<div class="trainer">${pCardsHTML(true)}</div>`;
+  return `${subHead('#/', 'Сегодня', esc(i.title.replace(/ · \d+$/, '')), t.key === 'new' ? (i.sub ? 'Новые слова: ' + esc(i.sub) : 'Новые слова по порядку учебника') : 'Слова, у которых подошёл срок повторения')}<div class="trainer">${wCardsHTML(true)}</div>`;
 }
 function initTask(r){
   const p = todayPlan(), t = p && (p.tasks || []).find(x => x.key === r.id);
@@ -574,41 +685,61 @@ function taskDoneHTML(text){
 }
 
 /* ---------- Курс ---------- */
+const ST_TEXT = {passed: 'пройдена', current: 'текущая', ahead: 'впереди'};
 function chapterRow(c){
-  const ws = chWords(c.n), d = chapterDone(c.n);
-  let sub = `с. ${c.p}`;
+  const ws = chWords(c.n), st = chStatus(c.n);
+  let sub = `с. ${courseOf(c.n).tb[0]}`;
   if(c.n === 3) sub += ` · знаю ${lettersKnown()} из ${LETTERS.length} букв`;
   else if(ws.length) sub += ` · ${ws.length} ${plural(ws.length, WORDS_F)}, выучено ${ws.filter(w => isLearned(w.n)).length}`;
-  return `<a class="ch-row${d ? ' passed' : ''}" href="${c.n === 3 ? '#/abc' : '#/ch/' + c.n}"><span class="num">${c.n}</span>
-    <span class="tt"><b>${esc(c.t)}</b><small>${sub}</small></span>${d ? `<span class="ok-ic" aria-label="пройдена">${ICON.check}</span>` : ICON.chev}</a>`;
+  return `<a class="ch-row ${st}" href="#/ch/${c.n}"><span class="num">${c.n}</span>
+    <span class="tt"><b>${esc(c.t)}</b><small>${sub}</small></span><span class="st ${st}">${st === 'passed' ? ICON.check : ''}${ST_TEXT[st]}</span></a>`;
 }
 function vCourse(){
-  const passed = passedCount();
-  return `${head('Курс', `Маунс, «Основы библейского греческого языка» · пройдено ${passed} из ${CHAPTERS.length}`)}
+  const passed = passedCount(), n = curCh();
+  return `${head('Курс', `Маунс, «Основы библейского греческого языка» · ${n > 36 ? 'учебник пройден' : `текущая глава ${n}, пройдено ${passed} из ${CHAPTERS.length}`}`)}
     <div class="parts">${PARTS.map(p => `<section class="card part"><h2><span>Часть ${p.n}</span>${esc(p.t)}</h2>
       <div class="ch-list">${CHAPTERS.filter(c => c.n >= p.from && c.n <= p.to).map(chapterRow).join('')}</div></section>`).join('')}</div>
     ${partsCard()}
-    <p class="hint">Сейчас в главах есть алфавит (глава 3), слова лексического минимума и основные формы глаголов (с главы 20). Объяснения, таблицы окончаний и упражнения из рабочей тетради появятся позже.</p>`;
+    <p class="hint">Главы открываются по порядку: следующая становится текущей, когда вы нажимаете «Глава пройдена». Чтобы вернуться к пройденной главе, откройте её и нажмите «Сделать текущей». Главы впереди можно смотреть и учить их слова карточками, в план на день они придут в свой черёд.</p>`;
 }
+// Полужирные формы, которые открываются в главе n
+const formsOfChapter = n => BOLD.filter(f => f.ch === n);
+const formName = f => PP_NAME[f.v.n + ':' + f.i] || PP_LABELS[f.i];
 function vChapter(r){
   const c = chapter(Number(r.id));
   if(!c) return `${subHead('#/course', 'Курс', 'Глава не найдена')}`;
-  const ws = chWords(c.n), learned = ws.filter(w => isLearned(w.n)).length;
-  const words = ws.length ? `<section class="card"><div class="plan-top"><h2>Слова главы</h2><span class="muted">выучено ${learned} из ${ws.length}</span></div>${bar(learned, ws.length, 'good')}
+  const k = courseOf(c.n), st = chStatus(c.n), ws = chWords(c.n), learned = ws.filter(w => isLearned(w.n)).length;
+  const status = st === 'current'
+      ? `<section class="card chap-now"><span class="kicker">Текущая глава</span><p class="hint">${esc(chapterHint(c.n))}</p><button type="button" class="btn primary" data-act="pass">${ICON.check}Глава пройдена</button></section>`
+    : st === 'passed'
+      ? `<section class="card"><span class="kicker ok-t">${ICON.check}Глава пройдена</span><p class="hint">Её слова и формы остаются в повторении. Можно вернуться к ней: новые слова и формы снова будут приходить только из глав до этой.</p><button type="button" class="btn" data-act="make-current" data-n="${c.n}">Сделать текущей</button></section>`
+      : `<section class="card"><span class="kicker">Глава впереди</span><p class="hint">Смотреть главу и учить её слова карточками можно уже сейчас. В план на день они придут, когда глава станет текущей (сейчас глава ${curCh()}).</p></section>`;
+  const learn = `<section class="card"><h2>Заучить в этой главе</h2>${k.learn.length ? learnList(k) : '<p class="hint">В этой главе автор не просит ничего заучивать.</p>'}
+      ${k.minor.length ? `<h3 class="minor-h">Второстепенное</h3><ul class="minor-list">${k.minor.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
+      <p class="src">Составлено по учебнику; подробно со ссылками в docs/course-map.md.</p></section>`;
+  const words = c.n === 3
+    ? `<section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${lettersKnown()} из ${LETTERS.length}</span></div>${bar(lettersKnown(), LETTERS.length, 'good')}
+        <div class="row"><a class="btn primary" href="#/abc">${ICON.cards}Карточки</a><a class="btn" href="#/abc?m=quiz">${ICON.quiz}Тест</a><a class="btn" href="#/abc?m=table">${ICON.table}Таблица</a></div></section>`
+    : ws.length ? `<section class="card"><div class="plan-top"><h2>Слова главы</h2><span class="muted">выучено ${learned} из ${ws.length}</span></div>${bar(learned, ws.length, 'good')}
       <div class="row"><a class="btn primary" href="#/words?r=c:${c.n}">${ICON.cards}Карточки</a><a class="btn" href="#/words?r=c:${c.n}&m=quiz">${ICON.quiz}Тест</a></div></section>`
     : `<section class="card"><p class="lead">В этой главе нет слов лексического минимума.</p></section>`;
-  return `${subHead('#/course', 'Курс', `Глава ${c.n}. ${esc(c.t)}`, `Учебник, с. ${c.p}`)}
-    <div class="cols"><div class="col">${words}${c.n >= 20 ? partsCard() : ''}
-      <p class="hint">Остальное содержимое главы (объяснения, таблицы, упражнения из рабочей тетради) появится позже.</p></div>
+  const fs = formsOfChapter(c.n);
+  const forms = k.pp || fs.length ? `<section class="card"><h2>Основные формы</h2>${k.pp ? `<p class="lead">Глава открывает: ${esc(k.pp[0].toLowerCase() + k.pp.slice(1))}</p>` : ''}
+      ${fs.length ? `<p class="hint">Новые формы для заучивания (полужирные в таблице книги): ${fs.length}</p><ul class="form-list">${fs.map(f => `<li><span class="gr">${esc(f.g)}</span> <small>${esc(formName(f).toLowerCase())} от <span class="gr">${esc(f.v.v)}</span></small></li>`).join('')}</ul>` : '<p class="hint">Новых форм для заучивания в этой главе нет: остальные формы образуются по правилам.</p>'}
+      <a class="btn" href="#/parts">${ICON.cards}Основные формы</a></section>` : '';
+  return `${subHead('#/course', 'Курс', `Глава ${c.n}. ${esc(c.t)}`, `${tbText(k)} · ${wbText(k)}`)}
+    <div class="cols"><div class="col">${status}${learn}${words}${forms}</div>
     <div class="col">${ws.length ? `<section class="card flat">${wordTable(ws)}</section>` : ''}</div></div>`;
 }
 
-// Карточка «Основные формы глаголов» в курсе и в главах с 20-й
+// Карточка «Основные формы глаголов» в курсе
 function partsCard(){
-  const st = VERBS.filter(v => pRec(v.n)).length, due = VERBS.filter(v => isPDue(v.n)).length;
-  return `<section class="card parts-card"><div class="plan-top"><h2>Основные формы глаголов</h2><span class="muted">начато ${st} из ${VERBS.length}</span></div>
-    <p class="lead">${VERBS.length} глаголов, которые встречаются в Новом Завете 50 раз и больше: шесть форм и пояснения из сносок (с. 412–421).${due ? ` К повторению: ${due}.` : ''}</p>
-    ${bar(st, VERBS.length, 'good')}
+  const open = openBold(), st = open.filter(f => fRec(f.n)).length, due = BOLD.filter(f => isFDue(f.n)).length;
+  return `<section class="card parts-card"><div class="plan-top"><h2>Основные формы глаголов</h2><span class="muted">${open.length ? `начато ${st} из ${open.length}` : 'с главы 16'}</span></div>
+    <p class="lead">${open.length
+      ? `Заучиваются только формы, выделенные в книге полужирным (с. 412–413), по мере того как учебник вводит времена. Открыто ${open.length} из ${BOLD.length}.${due ? ` К повторению: ${due}.` : ''}`
+      : 'Формы глаголов открываются по главам учебника: настоящее время в главе 16, первые формы для заучивания в главе 19.'}</p>
+    ${open.length ? bar(st, open.length, 'good') : ''}
     <div class="row"><a class="btn primary" href="#/parts">${ICON.cards}Карточки</a><a class="btn" href="#/parts?m=quiz">${ICON.quiz}Тест</a><a class="btn" href="#/parts?m=table">${ICON.table}Таблица</a></div></section>`;
 }
 
@@ -732,7 +863,7 @@ function wordCardHTML(w){
       ${chapterForm}
       <ul class="facts">${facts.join('')}</ul>
       ${forms}
-      ${v ? `<h3>Основные формы <span class="meta">учебник, с. ${v.p}</span></h3>${partsBlock(v)}<a class="btn sm" href="#/parts?v=${v.n}" data-wc="close-go">Карточки основных форм</a>` : ''}
+      ${v ? `<h3>Основные формы <span class="meta">учебник, с. ${v.p}</span></h3>${partsBlock(v)}<a class="btn sm" href="#/parts?v=${v.n}" data-wc="close-go">Основные формы глагола</a>` : ''}
       <p class="wc-state"><span class="dot ${DOT[wState(w.n)] || (isAdded(w.n) ? 'a' : '')}"></span>${stateText(w.n)}</p>
       ${action}
     </div>`;
@@ -970,11 +1101,23 @@ function wqFinish(){
   $('#wqMiss').innerHTML = WQ.miss.length ? `Ошибки: <span class="gr big-gr">${WQ.miss.map(w => esc(split(w.g)[0])).join(', ')}</span>. Эти слова попали в «Трудные» и вернутся в повторение сегодня.` : 'Без ошибок.';
 }
 
-/* ---------- Основные формы глаголов: карточки, тест «Какая это форма?», таблица ---------- */
-// Порядок повторения тот же, что у слов; прогресс в parts_progress (номер глагола из parts.js)
-const PS = {set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false, mode: 'cards', focus: 0};
+/* ---------- Основные формы глаголов: карточки полужирных форм, тест «Какая это форма?», таблица ---------- */
+// Карточка = одна полужирная форма открытого времени (её автор велит заучить, с. 412–413). Остальные формы видны на обороте
+// и в таблице как «по правилу». Порядок повторения тот же, что у слов; прогресс в form_progress
+const PS = {set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false, mode: 'cards', focus: 0, all: false};
 const PQ = {list: [], i: 0, score: 0, miss: []};
-const plvl = v => { const s = pRec(v.n); return s ? '●'.repeat(s.level || 0) + '○'.repeat(6 - (s.level || 0)) : 'новый'; };
+const FORMS_F = ['форма', 'формы', 'форм'];
+const PP_SHORT_EX = {'35:2': 'имперф.', '64:2': 'плюсквамперф.'};
+const formShort = f => PP_SHORT_EX[f.v.n + ':' + f.i] || PP_SHORT[f.i];
+const flvl = f => { const s = fRec(f.n); return s ? '●'.repeat(s.level || 0) + '○'.repeat(6 - (s.level || 0)) : 'новая'; };
+// Корень из первой сноски к глаголу: корни первого предложения, иначе первый найденный
+function rootOf(v){
+  const t = (v.fn || {})[0] || '', all = (t.match(/\*[^\s.,;:()▸]+/g) || []);
+  const first = (t.split(/\.\s/)[0].match(/\*[^\s.,;:()▸]+/g) || []);
+  return [...new Set(first.length ? first : all.slice(0, 1))];
+}
+const hasCards = () => openBold().length > 0 || BOLD.some(f => fRec(f.n));
+const quizReady = () => FORMS.some(f => f.i > 0 && isOpen(f));
 function pCardsHTML(task){
   return `${task ? '' : `<div class="row between">${seg('pset', [['srs','Повторение'],['all','Все'],['hard','Трудные']], PS.set, 'Набор')}<button type="button" class="btn sm" id="pShuffle">Перемешать</button></div>`}
     <div class="pbar thin"><i id="pBar"></i></div>
@@ -986,72 +1129,104 @@ function pCardsHTML(task){
     <div class="done-box" id="pDone" hidden></div>
     ${task ? '' : '<p class="meta center" id="pStats"></p>'}`;
 }
+const notYet = text => `<div class="done-box"><span class="done-ic">${ICON.done}</span><p>${text}</p><a class="btn" href="#/ch/${Math.min(curCh(), 36)}">Текущая глава</a></div>`;
 function vParts(r){
   PS.mode = ['quiz', 'table'].includes(r.q.get('m')) ? r.q.get('m') : 'cards';
   PS.focus = +r.q.get('v') || 0;
-  return `${subHead('#/course', 'Курс', 'Основные формы глаголов', `${VERBS.length} глаголов, которые встречаются в Новом Завете 50 раз и больше. Учебник, с. 412–421`)}
+  // открыт из статьи слова: если у глагола нет открытых форм для заучивания, показываем его строку в таблице
+  const fv = VERB.get(PS.focus);
+  if(fv && PS.mode === 'cards' && !openBold().some(f => f.v === fv)){ PS.mode = 'table'; if(!vForms(fv).every(isOpen)) PS.all = true; }
+  const open = openBold();
+  return `${subHead('#/course', 'Курс', 'Основные формы глаголов', open.length ? `Для заучивания открыто ${open.length} ${plural(open.length, FORMS_F)} из ${BOLD.length}. Учебник, с. 412–421` : 'Формы открываются по главам учебника. Учебник, с. 412–421')}
     <div class="trainer${PS.mode === 'table' ? ' wide' : ''}" id="p-trainer">
       ${seg('pmode', [['cards','Карточки'],['quiz','Тест'],['table','Таблица']], PS.mode, 'Режим')}
-      <section id="p-cards"${PS.mode === 'cards' ? '' : ' hidden'}>${pCardsHTML(false)}</section>
-      <section id="p-quiz"${PS.mode === 'quiz' ? '' : ' hidden'}>
+      <section id="p-cards"${PS.mode === 'cards' ? '' : ' hidden'}>${hasCards() ? pCardsHTML(false)
+        : notYet('Карточки появятся в главе 19: там учебник вводит будущее время и первые формы для заучивания (<span class="gr">ἔσομαι</span>, <span class="gr">ἕξω</span>). Карточка спрашивает одну форму, которую книга выделяет полужирным.')}</section>
+      <section id="p-quiz"${PS.mode === 'quiz' ? '' : ' hidden'}>${quizReady() ? `
         <div class="pbar thin"><i id="pqBar"></i></div>
         <div class="row between"><span class="meta" id="pqMeta"></span><span class="meta" id="pqScore"></span></div>
         <div id="pqArea"><div class="qbox"><div class="meta">Какая это форма?</div><div class="prompt word" id="pqPrompt"></div></div>
           <div class="opts one" id="pqOpts"></div><div class="feedback" id="pqFb"></div>
           <button type="button" class="btn primary wide" id="pqNext" hidden>Дальше</button></div>
-        <div class="done-box" id="pqDone" hidden><div class="pct" id="pqPct"></div><p id="pqSum"></p><p class="meta" id="pqMiss"></p><button type="button" class="btn primary" id="pqRestart">Ещё раз</button></div>
+        <div class="done-box" id="pqDone" hidden><div class="pct" id="pqPct"></div><p id="pqSum"></p><p class="meta" id="pqMiss"></p><button type="button" class="btn primary" id="pqRestart">Ещё раз</button></div>`
+        : notYet('Тест откроется в главе 19, когда кроме настоящего времени появится будущее. В тесте только открытые формы глаголов пройденных глав.')}
       </section>
       <section id="p-table"${PS.mode === 'table' ? '' : ' hidden'}>${partsTableHTML()}</section>
     </div>`;
 }
 function partsTableHTML(){
-  return `<p class="hint">Полужирным выделены формы, которые книга советует заучить, остальные подчиняются правилам (с. 413). Нажмите на глагол, чтобы открыть его статью и сноски.</p>
-    <div class="card flat scroll-x"><table class="pp-table"><thead><tr>${PP_SHORT.map(l => `<th>${l}</th>`).join('')}</tr></thead><tbody>${VERBS.map(v =>
-    `<tr data-pv="${v.n}">${[v.v].concat(v.f).map((f, i) => `<td class="gr${(v.b || []).includes(i) ? ' bold' : ''}">${i ? '' : `<span class="dot ${DOT[pState(v.n)]}"></span>`}${esc(f)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  const all = PS.all, cols = [0, 1, 2, 3, 4, 5].filter(i => all || FORMS.some(f => f.i === i && isOpen(f)));
+  const verbs = all ? VERBS : VERBS.filter(v => verbCh(v) <= curCh());
+  const toggle = `<label class="check"><input type="checkbox" id="p-all"${all ? ' checked' : ''}><span>Показать всю таблицу книги</span></label>`;
+  if(!cols.length || !verbs.length) return `${toggle}<p class="hint">Пока ничего не открыто: формы глаголов появляются с главы 16, когда учебник вводит настоящее время.</p>`;
+  return `${toggle}<p class="hint">Полужирные формы заучиваются, остальные образуются по правилам (с. 413). Бледным то, что ещё не открыто. Нажмите на глагол, чтобы открыть его статью и сноски.</p>
+    <div class="card flat scroll-x"><table class="pp-table"><thead><tr>${cols.map(i => `<th>${PP_SHORT[i]}</th>`).join('')}</tr></thead><tbody>${verbs.map(v =>
+    `<tr data-pv="${v.n}"${v.n === PS.focus ? ' class="focus"' : ''}>${cols.map(i => { const f = FORM.get(v.n * 10 + i), g = formOf(v, i);
+      return `<td class="gr${f && f.bold ? ' bold' : ''}${!f ? ' none' : !isOpen(f) ? ' off' : ''}"${f && PP_NAME[v.n + ':' + i] ? ` title="${esc(PP_NAME[v.n + ':' + i])}"` : ''}>${f && f.bold && isOpen(f) ? `<span class="dot ${DOT[fState(f.n)]}"></span>` : ''}${esc(g)}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 function initParts(){
   $$('[data-pmode]').forEach(b => b.onclick = () => { PS.mode = b.dataset.pmode; pressed($$('[data-pmode]'), b);
     ['cards', 'quiz', 'table'].forEach(m => { $('#p-' + m).hidden = m !== PS.mode; });
     $('#p-trainer').classList.toggle('wide', PS.mode === 'table');
-    if(PS.mode === 'quiz' && !PQ.list.length) startPQuiz(); });
-  $('#pqNext').onclick = () => { PQ.i++; PQ.i >= PQ.list.length ? pqFinish() : pAsk(); };
-  $('#pqRestart').onclick = startPQuiz;
-  $('#p-table').onclick = e => { const tr = e.target.closest('[data-pv]'); if(tr) openWord(VERB.get(+tr.dataset.pv).d); };
-  startPCards(null);
+    if(PS.mode === 'quiz' && quizReady() && !PQ.list.length) startPQuiz(); });
+  const tbl = $('#p-table');
+  tbl.onclick = e => { const tr = e.target.closest('[data-pv]'); if(tr) openWord(VERB.get(+tr.dataset.pv).d); };
+  tbl.onchange = e => { if(e.target.id === 'p-all'){ PS.all = e.target.checked; tbl.innerHTML = partsTableHTML(); } };
+  if(PS.focus && PS.mode === 'table'){ const row = tbl.querySelector('tr.focus'); if(row) setTimeout(() => row.scrollIntoView({block: 'center'}), 50); }
+  if(quizReady()){ $('#pqNext').onclick = () => { PQ.i++; PQ.i >= PQ.list.length ? pqFinish() : pAsk(); }; $('#pqRestart').onclick = startPQuiz; }
+  if(hasCards()) startPCards(null);
   PQ.list = [];
-  if(PS.mode === 'quiz') startPQuiz();
+  if(PS.mode === 'quiz' && quizReady()) startPQuiz();
 }
 function startPCards(task){
   PS.task = task; PS.rendered = false;
-  $('#pCard').onclick = e => { if(!e.target.closest('a')) $('#pCard').classList.toggle('flipped'); };
-  $('#pCard').onkeydown = e => { if(e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); $('#pCard').classList.toggle('flipped'); } };
+  const card = $('#pCard'), flip = () => card.classList.toggle('flipped');
+  // «Пояснения» раскрываются, не переворачивая карточку
+  card.onclick = e => { if(!e.target.closest('a, details')) flip(); };
+  card.onkeydown = e => { if(e.target === card && (e.key === ' ' || e.key === 'Enter')){ e.preventDefault(); flip(); } };
   $('#pKnow').onclick = () => pNext(true); $('#pAgain').onclick = () => pNext(false);
   if($('#pShuffle')) $('#pShuffle').onclick = buildPDeck;
   $$('[data-pset]').forEach(b => b.onclick = () => { PS.set = b.dataset.pset; pressed($$('[data-pset]'), b); PS.focus = 0; buildPDeck(); });
   buildPDeck();
 }
+const isFHard = f => !!(fRec(f.n) || {}).hard;
 function buildPDeck(){
-  const t = today();
   if(PS.task){
-    const d = taskDeck(PS.task), fresh = d.filter(v => !pRec(v.n));
-    PS.deck = shuffle(d.filter(v => pRec(v.n))).concat(fresh);
+    const d = taskDeck(PS.task), fresh = d.filter(f => !fRec(f.n));
+    PS.deck = shuffle(d.filter(f => fRec(f.n))).concat(fresh);
   } else {
-    if(PS.set === 'hard' && !VERBS.some(v => (pRec(v.n) || {}).hard)){ PS.set = 'all'; pressed($$('[data-pset]'), $('[data-pset=all]')); }
-    if(PS.set === 'srs') PS.deck = shuffle(VERBS.filter(v => pRec(v.n) && pRec(v.n).due <= t)).concat(VERBS_BY_FREQ.filter(v => !pRec(v.n)).slice(0, NEW_PARTS));
-    else PS.deck = shuffle(PS.set === 'hard' ? VERBS.filter(v => (pRec(v.n) || {}).hard) : VERBS);
-    // открыт из статьи слова: этот глагол первым
-    const f = VERB.get(PS.focus);
-    if(f){ PS.deck = [f].concat(PS.deck.filter(v => v !== f)); PS.focus = 0; }
+    const open = openBold();
+    if(PS.set === 'hard' && !BOLD.some(isFHard)){ PS.set = 'all'; pressed($$('[data-pset]'), $('[data-pset=all]')); }
+    if(PS.set === 'srs') PS.deck = shuffle(BOLD.filter(f => isFDue(f.n))).concat(open.filter(f => !fRec(f.n)).slice(0, NEW_PARTS));
+    else PS.deck = shuffle(PS.set === 'hard' ? BOLD.filter(isFHard) : open);
+    // открыт из статьи слова: формы этого глагола первыми
+    const v = VERB.get(PS.focus);
+    if(v){ const mine = open.filter(f => f.v === v); PS.deck = mine.concat(PS.deck.filter(f => f.v !== v)); PS.focus = 0; }
   }
-  PS.idx = 0; PS.known = 0; PS.failed.clear(); PS.size = new Set(PS.deck.map(v => v.n)).size;
+  PS.idx = 0; PS.known = 0; PS.failed.clear(); PS.size = new Set(PS.deck.map(f => f.n)).size;
   if(!PS.deck.length) return pFinish();
   $('#pDone').hidden = true; $('#pArea').hidden = false; pRender();
 }
-function pFront(v){ return `<div class="num">№ ${v.n}</div><div class="lvl">${plvl(v)}</div><div class="wg">${esc(v.v)}</div><div class="wru">${esc(v.ru)}</div><div class="hint">какие у него формы? нажмите</div>`; }
-function pBack(v){ return `<div class="pb-head"><span class="gr">${esc(v.v)}</span><span class="muted">${esc(v.ru)}</span></div>${partsBlock(v)}<div class="src">Маунс, с. ${v.p}</div>`; }
+// Лицевая сторона: глагол, значение, корень и вопрос; у настоящего времени сам глагол не показывается
+function pFront(f){
+  const v = f.v, root = rootOf(v);
+  return `<div class="num">гл. ${f.ch}</div><div class="lvl">${flvl(f)}</div>
+    ${f.i ? `<div class="wg">${esc(v.v)}</div><div class="wru">${esc(v.ru)}</div>` : `<div class="wru lg">${esc(v.ru)}</div>`}
+    ${root.length ? `<div class="root">корень <span class="gr">${esc(root.join(', '))}</span></div>` : ''}
+    <div class="fq">${esc(formName(f))}?</div><div class="hint">нажмите, чтобы перевернуть</div>`;
+}
+// Оборот: ответ крупно, ниже строка глагола только с открытыми формами, сноски свёрнуты в «Пояснения»
+function pBack(f){
+  const v = f.v, open = vForms(v).filter(isOpen);
+  const notes = Object.entries(v.fn || {}).filter(([i]) => { const g = FORM.get(v.n * 10 + +i); return g && isOpen(g); });
+  return `<div class="fb-q">${esc(formName(f))}</div><div class="fb-ans gr">${esc(f.g)}</div>
+    <div class="fb-line">${open.map(g => `<span class="fl${g.bold ? ' bold' : ''}${g === f ? ' cur' : ''}"><small>${formShort(g)}</small><span class="gr">${esc(g.g)}</span><em>${g.bold ? 'заучить' : 'по правилу'}</em></span>`).join('')}</div>
+    ${notes.length ? `<details class="fb-notes"><summary>Пояснения <span class="muted">· ${notes.length}</span>${ICON.chev}</summary><ul class="pp-notes">${notes.map(([i, t]) => `<li><b>${formShort(FORM.get(v.n * 10 + +i))}</b> <span class="gr">${esc(formOf(v, +i))}</span>: ${esc(t)}</li>`).join('')}</ul></details>` : ''}
+    <div class="src"><span class="gr">${esc(v.v)}</span>, ${esc(v.ru)} · Маунс, с. ${v.p}</div>`;
+}
 function pRender(){
-  const v = PS.deck[PS.idx], c = $('#pCard'); c.classList.remove('flipped');
-  setTimeout(() => { $('#pFront').innerHTML = pFront(v); $('#pBack').innerHTML = pBack(v); $('#pBack').scrollTop = 0; }, PS.rendered ? 120 : 0);
+  const f = PS.deck[PS.idx], c = $('#pCard'); c.classList.remove('flipped');
+  setTimeout(() => { $('#pFront').innerHTML = pFront(f); $('#pBack').innerHTML = pBack(f); $('#pBack').scrollTop = 0; }, PS.rendered ? 120 : 0);
   PS.rendered = true;
   $('#pMeta').textContent = `Карточка ${PS.idx + 1} из ${PS.deck.length}`;
   $('#pBar').style.width = (PS.idx / PS.deck.length * 100) + '%';
@@ -1059,58 +1234,57 @@ function pRender(){
 }
 function pStats(){
   const el = $('#pStats'); if(!el) return;
-  const t = today(); let st = 0, due = 0, sure = 0, hard = 0;
-  VERBS.forEach(v => { const s = pRec(v.n); if(s){ st++; if(s.due <= t) due++; if((s.level || 0) >= SURE) sure++; if(s.hard) hard++; } });
-  el.textContent = `Глаголов ${VERBS.length} · начато ${st} · уверенно ${sure} · к повторению ${due} · трудных ${hard}`;
+  const t = today(), open = openBold(); let st = 0, due = 0, sure = 0, hard = 0;
+  BOLD.forEach(f => { const s = fRec(f.n); if(s){ st++; if(s.due <= t) due++; if((s.level || 0) >= SURE) sure++; if(s.hard) hard++; } });
+  el.textContent = `Открыто для заучивания ${open.length} · начато ${st} · уверенно ${sure} · к повторению ${due} · трудных ${hard}`;
 }
 function pNext(ok){
-  const v = PS.deck[PS.idx]; if(!v) return;
-  const patch = srsPatch(pRec(v.n), PS.failed.has(v.n), ok);
-  if(patch) setPart(v.n, patch);
+  const f = PS.deck[PS.idx]; if(!f) return;
+  const patch = srsPatch(fRec(f.n), PS.failed.has(f.n), ok);
+  if(patch) setForm(f.n, patch);
   if(ok) PS.known++;
-  else { PS.failed.add(v.n); PS.deck.splice(Math.min(PS.idx + 4, PS.deck.length), 0, v); }
+  else { PS.failed.add(f.n); PS.deck.splice(Math.min(PS.idx + 4, PS.deck.length), 0, f); }
   PS.idx++;
   PS.idx >= PS.deck.length ? pFinish() : pRender();
 }
 function pFinish(){
   $('#pArea').hidden = true; $('#pDone').hidden = false; $('#pBar').style.width = '100%'; $('#pMeta').textContent = '';
-  const box = $('#pDone'), tomorrow = VERBS.filter(v => pRec(v.n) && pRec(v.n).due <= addDays(today(), 1)).length;
+  const box = $('#pDone'), tomorrow = BOLD.filter(f => fRec(f.n) && fRec(f.n).due <= addDays(today(), 1)).length;
   if(PS.task){
     if(PS.deck.length) markTask('parts', PS.size);
-    box.innerHTML = taskDoneHTML(PS.deck.length ? `Задание выполнено: ${PS.size} ${plural(PS.size, VERBS_F)}. Завтра к повторению: <b>${tomorrow}</b>.` : 'Эти глаголы уже пройдены.');
+    box.innerHTML = taskDoneHTML(PS.deck.length ? `Задание выполнено: ${PS.size} ${plural(PS.size, FORMS_F)}. Завтра к повторению: <b>${tomorrow}</b>.` : 'Эти формы уже пройдены.');
     return;
   }
-  const fresh = VERBS.filter(v => !pRec(v.n)).length;
+  const fresh = openBold().filter(f => !fRec(f.n)).length;
   box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>${PS.set === 'srs'
-    ? `${PS.deck.length ? 'Сессия завершена.' : 'На сегодня всё повторено.'} Завтра к повторению: <b>${tomorrow}</b>.${fresh ? ` Новых глаголов: ${fresh}.` : ''}`
+    ? `${PS.deck.length ? 'Сессия завершена.' : 'На сегодня всё повторено.'} Завтра к повторению: <b>${tomorrow}</b>.${fresh ? ` Новых форм: ${fresh}.` : ''}`
     : `Круг пройден. Отмечено «знаю»: <b>${PS.known}</b> из <b>${PS.size}</b>.`}</p>
-    <div class="row center">${PS.set === 'srs' && fresh ? `<button type="button" class="btn primary" id="pMore">Ещё ${Math.min(NEW_PARTS, fresh)} новых</button>` : ''}<button type="button" class="btn" id="pRestart">${PS.set === 'srs' ? 'Все глаголы' : 'Начать заново'}</button></div>`;
+    <div class="row center">${PS.set === 'srs' && fresh ? `<button type="button" class="btn primary" id="pMore">Ещё ${Math.min(NEW_PARTS, fresh)} новых</button>` : ''}<button type="button" class="btn" id="pRestart">${PS.set === 'srs' ? 'Все открытые формы' : 'Начать заново'}</button></div>`;
   if($('#pMore')) $('#pMore').onclick = buildPDeck;
   $('#pRestart').onclick = () => { if(PS.set === 'srs'){ PS.set = 'all'; pressed($$('[data-pset]'), $('[data-pset=all]')); } buildPDeck(); };
   pStats();
 }
-// Тест: дана форма, выбрать глагол и какая это из форм. Неверные варианты: другая форма того же глагола
-// и та же форма других глаголов. Вариант, который даёт ту же самую форму, не предлагается
-const formOf = (v, i) => i ? v.f[i - 1] : v.v;
-const optKey = (v, i) => v.n + ':' + i;
+// Тест: дана форма, выбрать глагол и какая это форма. Только открытые формы глаголов пройденных глав, полужирные и правильные.
+// Неверные варианты: другая форма того же глагола и та же форма других глаголов; вариант с той же самой формой не предлагается
 function startPQuiz(){
-  const all = [];
-  VERBS.forEach(v => v.f.forEach((f, j) => { if(f !== '–') all.push({v, i: j + 1}); }));
-  const hard = q => (pRec(q.v.n) || {}).hard;
-  // по одной форме от глагола, сначала трудные глаголы
-  const byVerb = new Map(); shuffle(all).forEach(q => { if(!byVerb.has(q.v.n)) byVerb.set(q.v.n, q); });
+  const pool = FORMS.filter(f => f.i > 0 && isOpen(f));
+  const hard = isFHard;
+  // по одной форме от глагола, сначала трудные полужирные формы
+  const byVerb = new Map();
+  shuffle(pool.filter(hard)).concat(shuffle(pool.filter(f => !hard(f)))).forEach(f => { if(!byVerb.has(f.v.n)) byVerb.set(f.v.n, f); });
   const qs = [...byVerb.values()];
-  PQ.list = shuffle(shuffle(qs.filter(hard)).concat(shuffle(qs.filter(q => !hard(q)))).slice(0, QUIZ_N));
+  PQ.list = shuffle(shuffle(qs.filter(hard)).concat(shuffle(qs.filter(f => !hard(f)))).slice(0, QUIZ_N));
   PQ.i = 0; PQ.score = 0; PQ.miss = []; $('#pqDone').hidden = true; $('#pqArea').hidden = false; pAsk();
 }
 function pOptions(q){
-  const form = formOf(q.v, q.i), out = [q], keys = new Set([optKey(q.v, q.i)]);
-  const ok = (v, i) => i > 0 && formOf(v, i) !== '–' && formOf(v, i) !== form && !keys.has(optKey(v, i));
-  const add = (v, i) => { if(out.length < 4 && ok(v, i)){ out.push({v, i}); keys.add(optKey(v, i)); } };
-  shuffle([1, 2, 3, 4, 5]).forEach(i => add(q.v, i));
-  if(out.length > 2) out.length = 2; keys.clear(); out.forEach(o => keys.add(optKey(o.v, o.i)));
-  shuffle(VERBS.filter(v => v !== q.v)).forEach(v => add(v, q.i));
-  shuffle(VERBS).forEach(v => shuffle([1, 2, 3, 4, 5]).forEach(i => add(v, i)));
+  let out = [q];
+  const keys = new Set([q.n]);
+  const ok = f => f && isOpen(f) && f.g !== q.g && !keys.has(f.n);
+  const add = f => { if(out.length < 4 && ok(f)){ out.push(f); keys.add(f.n); } };
+  shuffle(vForms(q.v)).forEach(add);
+  if(out.length > 2){ out = out.slice(0, 2); keys.clear(); out.forEach(o => keys.add(o.n)); }
+  shuffle(FORMS.filter(f => f.i === q.i && f.v !== q.v)).forEach(add);
+  shuffle(FORMS).forEach(add);
   return shuffle(out);
 }
 function pAsk(){
@@ -1118,24 +1292,26 @@ function pAsk(){
   $('#pqFb').innerHTML = ''; $('#pqNext').hidden = true;
   $('#pqMeta').textContent = `Вопрос ${PQ.i + 1} из ${N}`; $('#pqScore').textContent = `верно: ${PQ.score}`;
   $('#pqBar').style.width = (PQ.i / N * 100) + '%';
-  $('#pqPrompt').textContent = formOf(q.v, q.i);
+  $('#pqPrompt').textContent = q.g;
   const box = $('#pqOpts'); box.innerHTML = '';
   pOptions(q).forEach(o => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn popt';
-    const right = o.v === q.v && o.i === q.i;
-    b.innerHTML = `<span class="gr">${esc(o.v.v)}</span><small>${PP_LABELS[o.i].toLowerCase()}</small>`; b.dataset.ok = right ? 1 : 0;
+    const right = o === q;
+    b.innerHTML = `<span class="gr">${esc(o.v.v)}</span><small>${esc(formName(o).toLowerCase())}</small>`; b.dataset.ok = right ? 1 : 0;
     b.onclick = () => pAnswer(b, right, q); box.appendChild(b); });
 }
 function pAnswer(b, ok, q){
   $$('#pqOpts .btn').forEach(x => { x.disabled = true; if(x.dataset.ok === '1') x.classList.add('right'); });
-  if(ok) PQ.score++; else { b.classList.add('wrong'); PQ.miss.push(q); setPart(q.v.n, {level: 0, due: today(), hard: true}); }
+  if(ok) PQ.score++;
+  else { b.classList.add('wrong'); PQ.miss.push(q); if(q.bold) setForm(q.n, {level: 0, due: today(), hard: true}); }
   const note = (q.v.fn || {})[q.i];
-  $('#pqFb').innerHTML = `<b class="${ok ? 'good-t' : 'bad-t'}">${ok ? 'Верно' : 'Неверно'}.</b> <span class="gr big-gr">${esc(formOf(q.v, q.i))}</span>: ${esc(PP_LABELS[q.i].toLowerCase())} от <span class="gr big-gr">${esc(q.v.v)}</span> (${esc(q.v.ru)}).${note ? ` <span class="muted">${esc(note)}</span>` : ''}`;
+  $('#pqFb').innerHTML = `<b class="${ok ? 'good-t' : 'bad-t'}">${ok ? 'Верно' : 'Неверно'}.</b> <span class="gr big-gr">${esc(q.g)}</span>: ${esc(formName(q).toLowerCase())} от <span class="gr big-gr">${esc(q.v.v)}</span> (${esc(q.v.ru)}), ${q.bold ? 'форма для заучивания' : 'образуется по правилу'}.${note ? ` <span class="muted">${esc(note)}</span>` : ''}`;
   $('#pqScore').textContent = `верно: ${PQ.score}`; $('#pqNext').hidden = false; $('#pqNext').focus();
 }
 function pqFinish(){
   const N = PQ.list.length; $('#pqArea').hidden = true; $('#pqDone').hidden = false; $('#pqBar').style.width = '100%';
   $('#pqPct').textContent = Math.round(PQ.score / N * 100) + '%'; $('#pqSum').textContent = `Верно ${PQ.score} из ${N}.`;
-  $('#pqMiss').innerHTML = PQ.miss.length ? `Ошибки: <span class="gr big-gr">${PQ.miss.map(q => esc(formOf(q.v, q.i))).join(', ')}</span>. Эти глаголы попали в «Трудные» и вернутся в повторение сегодня.` : 'Без ошибок.';
+  const bold = PQ.miss.filter(q => q.bold).length;
+  $('#pqMiss').innerHTML = PQ.miss.length ? `Ошибки: <span class="gr big-gr">${PQ.miss.map(q => esc(q.g)).join(', ')}</span>.${bold ? ' Формы для заучивания с ошибкой попали в «Трудные» и вернутся в повторение сегодня.' : ''}${bold < PQ.miss.length ? ' Правильные формы стоит разобрать по правилам на с. 413.' : ''}` : 'Без ошибок.';
 }
 
 /* ---------- Алфавит, глава 3 (как в старом приложении) ---------- */
@@ -1155,7 +1331,7 @@ function abcCardsHTML(task){
 }
 function vAbc(r){
   AS.mode = ['quiz', 'table'].includes(r.q.get('m')) ? r.q.get('m') : 'cards';
-  return `${subHead('#/course', 'Курс', 'Глава 3. Алфавит и произношение', 'Маунс, «Основы библейского греческого языка», с. 23–27')}
+  return `${subHead('#/ch/3', 'Глава 3', 'Алфавит и произношение', 'Маунс, «Основы библейского греческого языка», с. 23–27')}
     <div class="trainer">
       ${seg('amode', [['cards','Карточки'],['quiz','Тест'],['table','Таблица']], AS.mode, 'Режим')}
       <section id="a-cards"${AS.mode === 'cards' ? '' : ' hidden'}>${abcCardsHTML(false)}</section>
@@ -1291,9 +1467,12 @@ function vProgress(){
   const kn = lettersKnown(), st = streak(), cov = coverage(), learned = LEX.filter(w => isLearned(w.n)).length;
   const week = Array.from({length: 7}, (_, i) => addDays(weekStart(), i)), plans = planMap(), t = today();
   const all = {sure:0, learn:0, hard:0, new:0}; LEX.forEach(w => all[wState(w.n)]++);
-  const pc = {sure:0, learn:0, hard:0, new:0}; VERBS.forEach(v => pc[pState(v.n)]++);
-  return `${head('Прогресс', 'Слова, основные формы, алфавит и дни занятий')}
+  const open = openBold(), pc = {sure:0, learn:0, hard:0, new:0}; open.forEach(f => pc[fState(f.n)]++);
+  const passed = passedCount(), cn = curCh();
+  return `${head('Прогресс', 'Курс, слова, основные формы, алфавит и дни занятий')}
     <div class="cols"><div class="col">
+      <section class="card"><div class="plan-top"><h2>Курс</h2><span class="muted">${passed} ${plural(passed, CH_F)} из ${CHAPTERS.length}</span></div>${bar(passed, CHAPTERS.length)}
+        <p class="hint">${cn > 36 ? 'Учебник пройден.' : `Текущая глава ${cn}: ${esc(chapter(cn).t)}.`}</p><a class="btn" href="${cn > 36 ? '#/course' : '#/ch/' + cn}">${cn > 36 ? 'Открыть курс' : 'Открыть главу'}</a></section>
       <section class="card nt-card"><h2>Текст Нового Завета</h2>
         <p class="nt-line">Вы знаете слова, которые составляют <b>${pctNT()}</b> текста Нового Завета.</p>
         ${bar(cov, NT_WORDS, 'good')}
@@ -1307,7 +1486,8 @@ function vProgress(){
           return `<span class="${s}${d === t ? ' today' : ''}${d > t ? ' future' : ''}"><small>${WDM[i]}</small><i>${s === 'full' ? ICON.check : dd}</i></span>`; }).join('')}</div>
         <span class="week-more">${ICON.cal}Календарь занятий${ICON.chev}</span>
       </section>
-      ${stackCard('Основные формы', VERBS.length, pc, plural(VERBS.length, VERBS_F))}
+      ${open.length ? stackCard('Основные формы', open.length, pc, `${plural(open.length, FORMS_F)} для заучивания открыто из ${BOLD.length}`)
+        : `<section class="card"><div class="plan-top"><h2>Основные формы</h2><span class="muted">с главы 19</span></div><p class="hint">Формы для заучивания открываются вместе с главами, где учебник вводит времена глаголов.</p></section>`}
       <section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${kn} из ${LETTERS.length}</span></div>${bar(kn, LETTERS.length, 'good')}
         <a class="btn" href="#/abc">Открыть алфавит</a></section>
     </div></div>`;
@@ -1323,11 +1503,8 @@ function vProfile(){
         <button type="button" class="btn sm" data-act="avatar">${u.avatar ? 'Изменить фото' : 'Поставить фото'}</button></div>
       <button type="button" class="icon-btn" data-act="edit-name" aria-label="Изменить имя">${ICON.pen}</button></section>
     <section class="card"><h2>План на день</h2>
-      <div class="field"><span class="flabel">Что учить дальше</span>
-        <div class="seg3 two" role="radiogroup" aria-label="Что учить дальше">${[['chapters','По главам учебника'],['freq','По частоте']].map(([k, l]) =>
-          `<input type="radio" name="p-order" id="p-order-${k}" value="${k}"${planOrder() === k ? ' checked' : ''}><label for="p-order-${k}">${l}</label>`).join('')}</div>
-        <p class="hint">${planOrder() === 'freq' ? 'Новые слова из всего словаря учебника, от самых частых в Новом Завете к редким. Уже начатые слова пропускаются.' : 'Новые слова по порядку глав: сначала лексический минимум, потом остальной словарь от частых слов к редким.'} Слова, которые вы добавили из словаря, тоже приходят в новые слова, до 10 в день.</p></div>
-      <label class="check"><input type="checkbox" id="p-parts"${partsOn() ? ' checked' : ''}><span>Основные формы глаголов в плане: ${NEW_PARTS} новых глаголов в день и повторение тех, у кого подошёл срок</span></label>
+      <p class="hint">Порядок задаёт учебник: новые слова приходят из лексического минимума глав до текущей, по ${NEW} в день, плюс до ${NEW} слов, которые вы добавили из словаря. После главы 36 новые слова идут из словаря, от частых к редким.</p>
+      <label class="check"><input type="checkbox" id="p-parts"${partsOn() ? ' checked' : ''}><span>Основные формы глаголов в плане: до ${NEW_PARTS} новых форм для заучивания в день и повторение тех, у кого подошёл срок. Формы открываются вместе с главами учебника</span></label>
     </section>
     <section class="card"><h2>Оформление</h2>
       <div class="seg3" role="radiogroup" aria-label="Тема">${[['light','Светлая'],['dark','Тёмная'],['auto','Как в системе']].map(([k, l]) =>
@@ -1349,7 +1526,7 @@ function vProfile(){
       <button type="button" class="btn" data-act="save-pass">Сменить пароль</button></div></details>
     <button type="button" class="btn wide" data-act="logout">Выйти</button>
     <details class="fold card"><summary><span>Удаление аккаунта</span>${ICON.chev}</summary><div class="fold-body">
-      <p class="hint">Вместе с аккаунтом удалится весь прогресс: слова, основные формы, буквы и планы. Вернуть их будет нельзя.</p>
+      <p class="hint">Вместе с аккаунтом удалится весь прогресс: слова, основные формы, буквы, главы и планы. Вернуть их будет нельзя.</p>
       <button type="button" class="btn danger" data-act="delete-account">Удалить аккаунт и все данные</button></div></details>
     <p class="hint"><a href="/privacy.html" target="_blank" rel="noopener">Политика конфиденциальности</a></p>
     </div></div>`;
@@ -1361,10 +1538,9 @@ async function loadProfileExtras(){
 window.addEventListener('hashchange', () => { if(route().name === 'profile' && S.loaded) loadProfileExtras(); });
 document.addEventListener('change', e => {
   if(e.target.name === 'p-theme') setTheme(e.target.value);
-  if(e.target.name === 'p-order') savePlanSettings({plan_order: e.target.value}, e.target);
   if(e.target.id === 'p-parts') savePlanSettings({parts_off: !e.target.checked}, e.target);
 });
-// Настройки плана хранятся в профиле; план на сегодня пересобирается, если задание ещё не начато
+// Выключатель основных форм хранится в профиле; задание на сегодня убирается или добавляется
 async function savePlanSettings(patch, el){
   try {
     const r = await pb.collection('users').update(me().id, patch);
@@ -1722,6 +1898,8 @@ document.addEventListener('click', async e => {
     case 'theme': setTheme(isDark() ? 'light' : 'dark'); if(route().name === 'profile') render(true); break;
     case 'avatar': askAvatar(); break;
     case 'calendar': openCalendar(); break;
+    case 'pass': passChapter(); break;
+    case 'make-current': makeCurrent(+d.n); break;
     case 'edit-name': openForm({title: 'Имя', fields: [{key: 'name', label: 'Как вас зовут', max: 100}], values: {name: me().name || ''},
       async onSave(v){ const r = await pb.collection('users').update(me().id, {name: v.name}); pb.authStore.save(pb.authStore.token, r); render(true); }}); break;
     default: accountAction(a, d);
@@ -1817,7 +1995,7 @@ async function copyText(text){
   try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); }
   catch(e){ window.prompt && window.prompt('Скопируйте:', text); }
 }
-function signOut(){ saveLS(cacheKey(), null); saveLS(qKey(), null); saveLS('avatar_' + me().id, null); pb.authStore.clear(); location.hash = ''; location.reload(); }
+function signOut(){ saveLS(cacheKey(), null); saveLS(qKey(), null); saveLS(chKey(), null); saveLS('avatar_' + me().id, null); pb.authStore.clear(); location.hash = ''; location.reload(); }
 async function accountAction(a, d){
   try{
     switch(d.act){

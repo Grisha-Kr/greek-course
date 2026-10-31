@@ -38,6 +38,9 @@ onRecordCreateRequest((e) => {
     e.record.set("role", "admin");
   }
   if (!e.record.getString("theme")) e.record.set("theme", "auto");
+  // курс начинается с главы 1 (правки 2.1)
+  const ch = e.record.getInt("chapter");
+  if (ch < 1 || ch > 37) e.record.set("chapter", 1);
 
   e.next();
 
