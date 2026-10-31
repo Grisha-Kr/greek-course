@@ -521,3 +521,86 @@ button.wh:focus-visible{outline:2px solid var(--accent);outline-offset:2px;borde
 .pp-table td.none{color:var(--muted)}
 .pp-table tr.focus{background:var(--soft)}
 #p-table{display:flex;flex-direction:column;gap:10px}
+
+/* ---------- Таблицы и правила (этап 3а) ---------- */
+.learn-list li{flex-wrap:wrap}
+.learn-list li > span{flex:1 1 220px;min-width:0}
+.learn-list .learn-go{min-height:36px;padding:0 12px;font-size:13.5px;margin-left:auto}
+.drill-sum{border-top:1px solid var(--line);padding-top:10px}
+.dl{list-style:none;display:flex;flex-direction:column}
+.drow{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line)}
+.drow:first-child{border-top:0}
+.drow .tt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;line-height:1.3}
+.drow .tt b{font-weight:600;font-size:14.5px}
+.drow small{color:var(--muted);font-size:12.5px}
+.drow .acts{display:flex;gap:4px;flex:none}
+.drow .acts svg{width:19px;height:19px}
+.drow.ref .tt b{font-weight:500}
+.dlist.ahead h2{color:var(--muted)}
+.trainer.wide-t{max-width:760px}
+.dcard h2{font-size:20px}
+.dc-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.dc-top .lvl{font-size:12px;color:var(--muted);letter-spacing:.08em}
+.dq{font-size:17px;line-height:1.45}
+.dans{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.da{font-size:16px;line-height:1.5}
+.da.gr-lg{font-size:20px;font-weight:600;line-height:1.35}
+.dex{font-family:var(--f-head);font-size:17px;line-height:1.4;background:var(--soft);padding:10px 12px;border-radius:12px}
+.dprep{display:flex;align-items:baseline;justify-content:center;gap:10px;padding:16px 0 4px;flex-wrap:wrap}
+.dprep .gr{font-size:46px;color:var(--accent);line-height:1}
+.dprep small{font-size:19px;color:var(--muted)}
+.dcard .lead.bad-t{color:var(--bad);font-weight:600}
+/* таблица как в книге */
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px}
+.ptab{border-collapse:collapse;width:100%}
+.ptab th,.ptab td{padding:5px 5px;text-align:left;vertical-align:middle}
+.ptab thead th{font-size:12.5px;font-weight:600;color:var(--muted);font-style:italic;line-height:1.2}
+.ptab thead tr:last-child th{border-bottom:1.5px solid var(--ink)}
+.ptab tr.decl th{font-style:italic;font-weight:500;font-size:13px}
+.ptab th.rl{font-size:12.5px;font-weight:500;color:var(--muted);font-style:italic;width:1%;white-space:nowrap;padding-right:8px;border-right:1.5px solid var(--ink)}
+.ptab th.rl.gr{font-family:var(--f-head);font-style:normal;font-size:18px;color:var(--ink)}
+.ptab th.rl small{display:block;font-style:normal;font-size:11.5px;font-weight:400;white-space:normal;max-width:16ch}
+.ptab td{font-family:var(--f-head);font-size:19px;line-height:1.2}
+.ptab.many td{font-size:17px}
+.ptab tr.pl > *{border-top:1px solid var(--line)}
+.ptab td.none{background:repeating-linear-gradient(135deg,transparent 0 6px,var(--line) 6px 7px);opacity:.5}
+.ptab td u{text-decoration-thickness:1.5px;text-underline-offset:3px}
+.cin{appearance:none;display:block;width:100%;min-width:40px;min-height:40px;padding:4px 6px;border:1.5px dashed var(--card-line);border-radius:10px;background:var(--bg);color:var(--ink);font-family:var(--f-head);font-size:inherit;text-align:left;cursor:pointer;line-height:1.15}
+.cin.on{border:2px solid var(--accent);background:var(--card);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+.cin .peek{color:var(--muted)}
+.ptab td.ok{color:var(--good)}
+.ptab td.err{color:var(--bad)}
+.ptab td s{display:block;font-size:.85em;opacity:.85}
+.ptab td s.empty{font-family:var(--f-body);font-size:12px}
+.ptab td .right{display:block;color:var(--good);font-weight:700}
+.ptab td .was{display:block;font-family:var(--f-body);font-size:11px;color:var(--muted)}
+@media (max-width: 420px){
+  .ptab.many td{font-size:15.5px}
+  .ptab th,.ptab td{padding:4px 3px}
+}
+/* экранная греческая клавиатура */
+.kb-dock{position:sticky;bottom:calc(78px + env(safe-area-inset-bottom,0px));z-index:5}
+@media (min-width: 900px){ .kb-dock{position:static} }
+.kb{background:var(--side);border:1px solid var(--card-line);border-radius:16px;padding:8px;display:flex;flex-direction:column;gap:5px;box-shadow:0 6px 20px rgba(40,25,10,.12);max-width:600px;width:100%}
+.kb-top{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:0 2px}
+.kb-top .meta{font-size:12px}
+.kb-q{width:30px;height:30px;border-radius:50%;border:1px solid var(--card-line);background:var(--card);color:var(--muted);font-weight:700;cursor:pointer;flex:none}
+.kb-help{font-size:12.5px;color:var(--muted);display:flex;flex-direction:column;gap:6px;padding:4px 2px 6px}
+.kb-map{display:flex;flex-wrap:wrap;gap:4px 12px}
+.kb-map span{white-space:nowrap}
+kbd{font-family:var(--f-body);font-size:11.5px;border:1px solid var(--card-line);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--card);color:var(--ink)}
+.kb-row{display:flex;gap:4px}
+.key{flex:1 1 0;min-width:0;min-height:46px;border-radius:10px;border:1px solid var(--card-line);background:var(--card);color:var(--ink);font-size:22px;line-height:1;cursor:pointer;padding:0;touch-action:manipulation;user-select:none;-webkit-user-select:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+.key.gr{font-family:var(--f-head)}
+.key:active{background:var(--soft)}
+.key.wide2{flex-grow:2}
+.key small{font-size:10.5px;color:var(--muted)}
+.key.mk{font-family:var(--f-head);font-size:24px}
+.kb-row.marks .key{background:var(--soft)}
+/* поиск в словаре с клавиатурой */
+.search-row{display:flex;gap:8px}
+.search-row .inp{flex:1;min-width:0}
+.kb-toggle{flex:none;min-width:54px;font-size:18px;padding:0 10px}
+.kb-toggle[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+#d-kbox .kb{margin-top:2px}
+.ptab th{text-transform:none;letter-spacing:0}

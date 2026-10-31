@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 /* ---------- Справочники ---------- */
 // LETTERS (data/letters.js), WORDS и SPECIAL (data/words.js), PARTS и CHAPTERS (data/chapters.js),
 // DICT (data/dictionary.js, словарь учебника), VERBS (data/parts.js, основные формы) и карта курса
-// COURSE, PP_OPEN, PP_EX, PP_NAME, PP_VERB_CH, COURSE_END (data/course.js) подключены отдельными файлами
+// COURSE, PP_OPEN, PP_EX, PP_NAME, PP_VERB_CH, COURSE_END (data/course.js), DRILLS и PREPS (data/drills.js, этап 3а) подключены отдельными файлами
 const INT = [0, 1, 3, 7, 14, 30, 60]; // интервалы повторения по ступеням 0–6, дней
 const NEW = 10;      // новых слов за сессию и в плане на день (и ещё до 10 добавленных вручную)
 const NEW_PARTS = 5; // новых полужирных основных форм в плане на день
@@ -15,10 +15,11 @@ const QUIZ_N = 20;   // вопросов в тесте слов и основн�
 const SURE = 4;      // с этой ступени (интервал от двух недель) слово «уверенно»
 const NT_WORDS = 138167; // слов в тексте Нового Завета (учебник, конец главы 8)
 // forms: прогресс полужирных основных форм (form_progress, номер = глагол × 10 + форма). Старая parts_progress (этап 2) не загружается
-const PBN = {words:'word_progress', letters:'letter_progress', plans:'plan_days', forms:'form_progress', added:'word_added'};
+// drills: прогресс таблиц, правил и карточек предлогов (drill_progress, этап 3а), ключ k из data/drills.js
+const PBN = {words:'word_progress', letters:'letter_progress', plans:'plan_days', forms:'form_progress', added:'word_added', drills:'drill_progress'};
 const KEYS = Object.keys(PBN);
-const FIELDS = {words:['n','level','due','hard'], letters:['n','known','hard'], plans:['date','tasks','done'], forms:['n','level','due','hard'], added:['n']};
-const MATCH = {words:'n', letters:'n', plans:'date', forms:'n', added:'n'}; // по какому полю запись единственная у пользователя
+const FIELDS = {words:['n','level','due','hard'], letters:['n','known','hard'], plans:['date','tasks','done'], forms:['n','level','due','hard'], added:['n'], drills:['k','level','due','hard']};
+const MATCH = {words:'n', letters:'n', plans:'date', forms:'n', added:'n', drills:'k'}; // по какому полю запись единственная у пользователя
 // Все слова: лексический минимум (как в главах, номера 1–320) и остальные статьи словаря (номера с 321).
 // Частотность и часть речи у всех слов из словаря; d: статья словаря (у εἰ μή её нет)
 const DICTN = new Map(DICT.map(d => [d.n, d]));
@@ -77,8 +78,8 @@ const ICON = {
 };
 
 /* ---------- Состояние ---------- */
-const S = {words:[], letters:[], plans:[], forms:[], added:[], invites:[], loaded:false};
-const WP = new Map(), LP = new Map(), FP = new Map(), AD = new Map(); // прогресс по номеру слова, буквы и формы; добавленные слова
+const S = {words:[], letters:[], plans:[], forms:[], added:[], drills:[], invites:[], loaded:false};
+const WP = new Map(), LP = new Map(), FP = new Map(), AD = new Map(), DP = new Map(); // прогресс по номеру слова, буквы и формы; добавленные слова; таблицы и правила по ключу
 const loadLS = (k, d) => { try { const v = localStorage.getItem('gk_'+k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } };
 const saveLS = (k, v) => { try { localStorage.setItem('gk_'+k, JSON.stringify(v)); } catch(e){} };
 const UI = {hops:0, shown:'', day:'', folds: new Set()};
@@ -157,6 +158,7 @@ function reindex(key){
   if(key === 'letters'){ LP.clear(); S.letters.forEach(r => LP.set(r.n, r)); }
   if(key === 'forms'){ FP.clear(); S.forms.forEach(r => FP.set(r.n, r)); }
   if(key === 'added'){ AD.clear(); S.added.forEach(r => AD.set(r.n, r)); }
+  if(key === 'drills'){ DP.clear(); S.drills.forEach(r => DP.set(r.k, r)); }
 }
 // Ответ «Знаю» или «Повторить» (ошибка в тесте): изменения записи прогресса слова или глагола.
 // «Знаю» новому или ошибочному в этой сессии: ступень 1 на завтра; со сроком: следующая ступень; «Повторить»: ступень 0, сегодня, трудное
@@ -327,9 +329,10 @@ const setForm = (n, patch) => saveRec('forms', n, patch);
 /* ---------- План на сегодня ---------- */
 // Задания: review: слова с подошедшим сроком из любых глав; new: 10 новых слов лексического минимума глав до текущей
 // по порядку учебника и до 10 слов, добавленных из словаря вручную; parts: до 5 новых полужирных основных форм открытых
-// времён и формы со сроком; alphabet: трудные и невыученные буквы, с главы 3. План составляется при первом открытии дня
+// времён и формы со сроком; drills (этап 3а): таблицы, правила и предлоги со сроком и новые (до 3 и до 5) из глав до текущей;
+// alphabet: трудные и невыученные буквы, с главы 3. План составляется при первом открытии дня
 // и хранится в plan_days. У заданий new и parts есть ch: глава, для которой они составлены
-const TASK_ORDER = ['review', 'new', 'parts', 'alphabet'];
+const TASK_ORDER = ['review', 'new', 'drills', 'parts', 'alphabet'];
 const todayPlan = () => S.plans.find(p => p.date === today());
 const partsOn = () => !me().parts_off;
 const addedWaiting = () => S.added.slice().sort((a, b) => String(a.created).localeCompare(String(b.created))).map(r => WORD.get(r.n)).filter(w => w && !wRec(w.n));
@@ -353,6 +356,7 @@ function taskDeck(t){
     return BOLD.filter(f => isFDue(f.n)).concat(fresh);
   }
   if(t.key === 'alphabet') return lettersLeft();
+  if(t.key === 'drills') return ITEMS.filter(d => isDDue(d.k)).concat((t.items || []).map(k => ITEM.get(k)).filter(d => d && !dRec(d.k)));
   return [];
 }
 function buildPlan(){
@@ -361,6 +365,8 @@ function buildPlan(){
   if(due) tasks.push({key: 'review', count: due, done: false});
   const next = nextNew();
   if(next.length) tasks.push({key: 'new', words: next, ch: curCh(), done: false});
+  const dt = drillsTask();
+  if(dt) tasks.push(dt);
   const pt = partsTask();
   if(pt) tasks.push(pt);
   const abc = lettersLeft().length;
@@ -370,7 +376,7 @@ function buildPlan(){
 // Привести сегодняшний план в соответствие с текущей главой. Ещё не начатые задания new и parts, составленные
 // для другой главы (или старым приложением), пересобираются; алфавит до главы 3 убирается.
 // add: добавить недостающие задания (после нажатия «Глава пройдена» или «Сделать текущей»), если план ещё не выполнен
-function fitPlan(tasks, add){
+function fitPlan(tasks, add, fresh){
   const ch = curCh(), out = tasks.slice();
   let changed = false;
   const i = out.findIndex(t => t.key === 'new'), t = out[i];
@@ -385,6 +391,13 @@ function fitPlan(tasks, add){
     if(j >= 0){ if(pt) out[j] = pt; else out.splice(j, 1); changed = true; }
     else if(pt){ out.push(pt); changed = true; }
   }
+  // Таблицы и правила: так же, как основные формы. Плану, составленному до этапа 3а, задание добавляется один раз (fresh)
+  const q = out.findIndex(t => t.key === 'drills'), dt0 = out[q];
+  if(q >= 0 ? !dt0.done && dt0.ch !== ch && !(dt0.items || []).some(k => dRec(k)) : add || fresh){
+    const dt = drillsTask();
+    if(q >= 0){ if(dt) out[q] = dt; else out.splice(q, 1); changed = true; }
+    else if(dt){ out.push(dt); changed = true; }
+  }
   const k = out.findIndex(t => t.key === 'alphabet');
   if(k >= 0 && !out[k].done && ch < 3){ out.splice(k, 1); changed = true; }
   if(k < 0 && add && ch >= 3){ const n = lettersLeft().length; if(n){ out.push({key: 'alphabet', count: n, done: false}); changed = true; } }
@@ -395,7 +408,10 @@ function checkPlan(){
   if(!UI.ready || !pb.authStore.isValid || !chKnown()) return;
   const p = todayPlan();
   if(!p){ const tasks = buildPlan(); saveRec('plans', today(), {tasks, done: tasks.length === 0}); return; }
-  let tasks = fitPlan(p.tasks || [], false), changed = !!tasks;
+  // план, составленный до этапа 3а: задание «Таблицы и правила» добавляется один раз за день (отметка на устройстве)
+  const mark = 'drills_fit_' + me().id, fresh = !p.done && loadLS(mark, '') !== p.date && !(p.tasks || []).some(t => t.key === 'drills');
+  if(loadLS(mark, '') !== p.date) saveLS(mark, p.date);
+  let tasks = fitPlan(p.tasks || [], false, fresh), changed = !!tasks;
   tasks = tasks || p.tasks || [];
   if(tasks.some(t => !t.done && !taskDeck(t).length)){ tasks = tasks.map(t => !t.done && !taskDeck(t).length ? {...t, done: true} : t); changed = true; }
   if(changed) saveRec('plans', today(), {tasks, done: tasks.every(t => t.done)});
@@ -446,10 +462,11 @@ function newInfo(ns){
   return {range, sub: sub.join(', ')};
 }
 function taskInfo(t){
-  const n = t.done ? (t.count || (t.words || []).length || (t.forms || t.verbs || []).length) : t.key === 'new' ? (t.words || []).length : taskDeck(t).length;
+  const n = t.done ? (t.count || (t.words || []).length || (t.forms || t.verbs || t.items || []).length) : t.key === 'new' ? (t.words || []).length : taskDeck(t).length;
   if(t.key === 'review') return {title: `Слова к повторению · ${n}`, min: Math.max(1, Math.ceil(n * 8 / 60)), href: '#/task/review'};
   if(t.key === 'new'){ const r = newInfo(t.words || []); return {title: `Новые слова${r.range ? ', ' + r.range : ''} · ${n}`, sub: r.sub, min: Math.max(2, Math.ceil(n * 25 / 60)), href: '#/task/new'}; }
   if(t.key === 'parts'){ const fresh = (t.forms || []).filter(x => !fRec(x)).length; return {title: `Основные формы · ${n}`, sub: t.done ? '' : [fresh ? `новых форм: ${fresh}` : '', n - fresh > 0 ? `повторить: ${n - fresh}` : ''].filter(Boolean).join(', '), min: Math.max(1, Math.ceil(n * 12 / 60)), href: '#/task/parts'}; }
+  if(t.key === 'drills'){ const fresh = (t.items || []).filter(k => !dRec(k)).length; return {title: `Таблицы и правила · ${n}`, sub: t.done ? '' : [fresh ? `новых: ${fresh}` : '', n - fresh > 0 ? `повторить: ${n - fresh}` : ''].filter(Boolean).join(', '), min: Math.max(2, Math.ceil(n * 50 / 60)), href: '#/task/drills'}; }
   return {title: 'Алфавит', sub: `трудные и невыученные: ${n} ${plural(n, LET_F)}`, min: Math.max(2, Math.ceil(n * 8 / 60)), href: '#/task/alphabet'};
 }
 // День в календаре: full: план выполнен полностью, half: сделано хотя бы одно задание, '': занятий не было
@@ -536,7 +553,8 @@ $('#update-close').addEventListener('click', () => { $('#update-bar').hidden = t
 function showNotice(text){ $('#notice-text').textContent = text; $('#notice').hidden = false; }
 
 /* ---------- Адреса экранов: #/ сегодня, #/task/КЛЮЧ задание плана, #/course, #/ch/N глава, #/abc алфавит,
-   #/dict словарь, #/words?r=НАБОР&m=quiz карточки и тест слов, #/parts?m=cards|quiz|table&v=N основные формы,
+   #/dict словарь, #/words?r=НАБОР&m=quiz карточки и тест слов, #/parts?m=cards|quiz|table&v=N|ch=N основные формы,
+   #/drills таблицы и правила по главам, #/drill?k=КЛЮЧИ|set=srs|hard[&m=view] упражнения (этап 3а),
    #/progress, #/profile ---------- */
 function route(){
   const h = location.hash.replace(/^#\/?/, '');
@@ -555,9 +573,10 @@ const VIEWS = {
   course: {f: vCourse}, ch: {f: vChapter}, abc: {f: vAbc, init: initAbc, still: true},
   dict: {f: vDict, init: initDict, still: true}, words: {f: vWords, init: initWords, still: true},
   parts: {f: vParts, init: initParts, still: true},
+  drills: {f: vDrills}, drill: {f: vDrill, init: initDrill, still: true},
   progress: {f: vProgress}, profile: {f: vProfile},
 };
-const TAB = {home:'today', task:'today', course:'course', ch:'course', abc:'course', parts:'course', dict:'dict', words:'dict', progress:'progress'};
+const TAB = {home:'today', task:'today', course:'course', ch:'course', abc:'course', parts:'course', drills:'course', drill:'course', dict:'dict', words:'dict', progress:'progress'};
 let raf = 0;
 function schedule(){ if(raf) return; raf = requestAnimationFrame(() => { raf = 0; render(); }); }
 function render(force){
@@ -568,6 +587,7 @@ function render(force){
   checkPlan();
   const v = VIEWS[r.name] || VIEWS.home;
   if(v.still && !force && UI.shown === location.hash) return;
+  KB.target = null; // греческая клавиатура: каждый экран подключает её заново
   m.innerHTML = v.f(r);
   UI.shown = location.hash;
   v.init && v.init(r);
@@ -608,7 +628,9 @@ function vHome(){
 const pgs = r => r[0] === r[1] ? `с. ${r[0]}` : `с. ${r[0]}–${r[1]}`;
 const tbText = c => `Учебник: ${pgs(c.tb)}`;
 const wbText = c => c.wb.length ? `Тетрадь: ${c.wb.map(r => (r[2] ? r[2].toLowerCase() + ', ' : '') + pgs(r)).join('; ')}` : 'В тетради упражнений нет';
-const learnList = c => `<ul class="learn-list">${c.learn.map(([t, pg]) => `<li><span>${esc(t)}</span><small>с. ${esc(pg)}</small></li>`).join('')}</ul>`;
+// Третий элемент пункта (этап 3а): ключи упражнений из drills.js (или «p:N» — предлоги главы N); у таких пунктов кнопка «Учить»
+const learnList = c => `<ul class="learn-list">${c.learn.map(([t, pg, dk]) => { const its = dk ? itemsOf(dk) : [];
+  return `<li><span>${esc(t)}</span><small>с. ${esc(pg)}</small>${its.length ? `<a class="btn sm learn-go" href="#/drill?k=${encodeURIComponent(dk)}">${its.length === 1 && its[0].kind === 't' ? 'Учить таблицу' : 'Учить'}</a>` : ''}</li>`; }).join('')}</ul>`;
 // Подсказка в карточке текущей главы: что осталось сделать до кнопки «Глава пройдена»
 function chapterHint(n){
   const ws = chWords(n);
@@ -669,13 +691,14 @@ function vTask(r){
   if(!t) return `${subHead('#/', 'Сегодня', 'Задание')}<section class="card"><p>Этого задания сегодня нет в плане.</p><a class="btn" href="#/">К плану</a></section>`;
   const i = taskInfo(t);
   if(t.key === 'alphabet') return `${subHead('#/', 'Сегодня', 'Алфавит', 'Карточки трудных и ещё не выученных букв')}<div class="trainer">${abcCardsHTML(true)}</div>`;
+  if(t.key === 'drills') return `${subHead('#/', 'Сегодня', 'Таблицы и правила', 'Пункты, у которых подошёл срок, и новые из глав до текущей')}<div class="trainer">${drillTrainerHTML(true)}</div>`;
   if(t.key === 'parts'){ PS.ch = 0; return `${subHead('#/', 'Сегодня', 'Основные формы', 'Новые полужирные формы и формы, у которых подошёл срок повторения')}<div class="trainer">${pCardsHTML(true)}</div>`; }
   return `${subHead('#/', 'Сегодня', esc(i.title.replace(/ · \d+$/, '')), t.key === 'new' ? (i.sub ? 'Новые слова: ' + esc(i.sub) : 'Новые слова по порядку учебника') : 'Слова, у которых подошёл срок повторения')}<div class="trainer">${wCardsHTML(true)}</div>`;
 }
 function initTask(r){
   const p = todayPlan(), t = p && (p.tasks || []).find(x => x.key === r.id);
   if(!t) return;
-  if(t.key === 'alphabet') startAbcCards(t); else if(t.key === 'parts') startPCards(t); else startWCards(t);
+  if(t.key === 'alphabet') startAbcCards(t); else if(t.key === 'parts') startPCards(t); else if(t.key === 'drills') startDrills(t); else startWCards(t);
 }
 // Экран «задание выполнено» и переход к следующему
 function taskDoneHTML(text){
@@ -699,6 +722,7 @@ function vCourse(){
   return `${head('Курс', `Маунс, «Основы библейского греческого языка» · ${n > 36 ? 'учебник пройден' : `текущая глава ${n}, пройдено ${passed} из ${CHAPTERS.length}`}`)}
     <div class="parts">${PARTS.map(p => `<section class="card part"><h2><span>Часть ${p.n}</span>${esc(p.t)}</h2>
       <div class="ch-list">${CHAPTERS.filter(c => c.n >= p.from && c.n <= p.to).map(chapterRow).join('')}</div></section>`).join('')}</div>
+    ${drillsCard()}
     ${partsCard()}
     <p class="hint">Главы открываются по порядку: следующая становится текущей, когда вы нажимаете «Глава пройдена». Чтобы вернуться к пройденной главе, откройте её и нажмите «Сделать текущей». Главы впереди можно смотреть и учить их слова карточками, в план на день они придут в свой черёд.</p>`;
 }
@@ -714,7 +738,9 @@ function vChapter(r){
     : st === 'passed'
       ? `<section class="card"><span class="kicker ok-t">${ICON.check}Глава пройдена</span><p class="hint">Её слова и формы остаются в повторении. Можно вернуться к ней: новые слова и формы снова будут приходить только из глав до этой.</p><button type="button" class="btn" data-act="make-current" data-n="${c.n}">Сделать текущей</button></section>`
       : `<section class="card"><span class="kicker">Глава впереди</span><p class="hint">Смотреть главу и учить её слова карточками можно уже сейчас. В план на день они придут, когда глава станет текущей (сейчас глава ${curCh()}).</p></section>`;
+  const dits = ITEMS.filter(d => d.ch === c.n), refs = REFS.filter(d => d.ch === c.n);
   const learn = `<section class="card"><h2>Заучить в этой главе</h2>${k.learn.length ? learnList(k) : '<p class="hint">В этой главе автор не просит ничего заучивать.</p>'}
+      ${dits.length ? `<div class="row between drill-sum"><span class="meta">Таблицы и правила главы: начато ${dits.filter(d => dRec(d.k)).length} из ${dits.length}${st === 'ahead' ? '. Глава впереди: тренироваться можно, в план новые придут в свой черёд' : ''}</span><a class="btn sm" href="#/drill?k=ch:${c.n}">Учить всё</a></div>` : ''}
       ${k.minor.length ? `<h3 class="minor-h">Второстепенное</h3><ul class="minor-list">${k.minor.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
       <p class="src">Составлено по учебнику; подробно со ссылками в docs/course-map.md.</p></section>`;
   const words = c.n === 3
@@ -727,8 +753,10 @@ function vChapter(r){
   const forms = k.pp || fs.length ? `<section class="card"><h2>Основные формы</h2>${k.pp ? `<p class="lead">Глава открывает: ${esc(k.pp[0].toLowerCase() + k.pp.slice(1))}</p>` : ''}
       ${fs.length ? `<p class="hint">Новые формы для заучивания (полужирные в таблице книги): ${fs.length}</p><ul class="form-list">${fs.map(f => `<li><span class="gr">${esc(f.g)}</span> <small>${esc(formName(f).toLowerCase())} от <span class="gr">${esc(f.v.v)}</span></small></li>`).join('')}</ul>` : '<p class="hint">Новых форм для заучивания в этой главе нет: остальные формы образуются по правилам.</p>'}
       ${fs.length ? `<a class="btn primary" href="#/parts?ch=${c.n}">${ICON.cards}Формы этой главы</a>` : `<a class="btn" href="#/parts?m=table">${ICON.table}Таблица основных форм</a>`}</section>` : '';
+  const refCard = refs.length ? `<section class="card"><h2>Таблицы для справки</h2><p class="hint">Для справки, заучивать не нужно: автор советует понимать эти формы и узнавать их в тексте.</p>
+      <ul class="dl">${refs.map(d => `<li class="drow ref"><span class="tt"><b>${esc(d.t)}</b><small>с. ${esc(d.p)}</small></span><span class="acts"><a class="btn sm ghost" href="#/drill?k=${d.k}&m=view">Посмотреть</a></span></li>`).join('')}</ul></section>` : '';
   return `${subHead('#/course', 'Курс', `Глава ${c.n}. ${esc(c.t)}`, `${tbText(k)} · ${wbText(k)}`)}
-    <div class="cols"><div class="col">${status}${learn}${words}${forms}</div>
+    <div class="cols"><div class="col">${status}${learn}${words}${forms}${refCard}</div>
     <div class="col">${ws.length ? `<section class="card flat">${wordTable(ws)}</section>` : ''}</div></div>`;
 }
 
@@ -741,6 +769,384 @@ function partsCard(){
       : 'Формы глаголов открываются по главам учебника: настоящее время в главе 16, первые формы для заучивания в главе 19.'}</p>
     ${open.length ? bar(st, open.length, 'good') : ''}
     <div class="row"><a class="btn primary" href="#/parts">${ICON.cards}Карточки</a><a class="btn" href="#/parts?m=quiz">${ICON.quiz}Тест</a><a class="btn" href="#/parts?m=table">${ICON.table}Таблица</a></div></section>`;
+}
+
+/* ---------- Таблицы и правила (этап 3а): заполнение таблиц, карточки правил и предлогов ---------- */
+// DRILLS и PREPS (data/drills.js). Учебные пункты: таблицы (kind t), правила (r), карточки «предлог + падеж» (p);
+// таблицы kind v только для справки. Прогресс в drill_progress по ключу k, интервалы те же, что у слов.
+// План: пункты со сроком из любых глав и новые из глав до текущей по порядку учебника: до 3 таблиц и правил и до 5 предлогов
+const NEW_DRILLS = 3, NEW_PREPS = 5;
+const ITEMS_F = ['пункт', 'пункта', 'пунктов'];
+const KIND_RU = {t: 'таблица', r: 'правило', p: 'предлог', v: 'для справки'};
+const withGrid = d => d.cells ? {...d, grid: d.cells.map(r => r.split('|'))} : d;
+const ITEMS = DRILLS.filter(d => d.kind !== 'v').concat(PREPS.map(p => ({...p, kind: 'p', t: `${p.g} + ${p.c}`})))
+  .map((d, i) => ({...withGrid(d), i})).sort((a, b) => a.ch - b.ch || a.i - b.i);
+const ITEM = new Map(ITEMS.map(d => [d.k, d]));
+const REFS = DRILLS.filter(d => d.kind === 'v').map(withGrid);
+const REF = new Map(REFS.map(d => [d.k, d]));
+const dRec = k => DP.get(k);
+function dState(k){ const r = dRec(k); if(!r) return 'new'; if(r.hard) return 'hard'; return (r.level || 0) >= SURE ? 'sure' : 'learn'; }
+const isDDue = k => { const r = dRec(k); return !!r && r.due <= today(); };
+const dOpenItems = () => ITEMS.filter(d => d.ch <= curCh());
+const setDrill = (k, patch) => saveRec('drills', k, patch);
+const strictOn = () => !!me().strict_marks;
+const dlvl = k => { const s = dRec(k); return s ? '●'.repeat(s.level || 0) + '○'.repeat(6 - (s.level || 0)) : 'новый'; };
+// Новые на сегодня: по порядку учебника из глав до текущей
+function drillsFresh(){
+  const open = dOpenItems().filter(d => !dRec(d.k));
+  return open.filter(d => d.kind !== 'p').slice(0, NEW_DRILLS).concat(open.filter(d => d.kind === 'p').slice(0, NEW_PREPS));
+}
+function drillsTask(){
+  const items = drillsFresh().map(d => d.k), due = ITEMS.filter(d => isDDue(d.k)).length;
+  return items.length || due ? {key: 'drills', items, count: due, ch: curCh(), done: false} : null;
+}
+// Пункты, которые открывает кнопка «Учить»: ключи через запятую, «p:N» — предлоги главы N, «ch:N» — всё из главы N
+function itemsOf(spec){
+  const out = [];
+  String(spec || '').split(/[,\s]+/).filter(Boolean).forEach(s => {
+    const m = s.match(/^(p|ch):(\d+)$/);
+    const add = m ? ITEMS.filter(d => d.ch === +m[2] && (m[1] === 'ch' || d.kind === 'p')) : [ITEM.get(s)].filter(Boolean);
+    add.forEach(d => { if(!out.includes(d)) out.push(d); });
+  });
+  return out;
+}
+
+/* Клетки таблицы. «–» нет окончания; «_α» подчёркнутая буква; «σι(ν)» ν можно не писать; «α/ν» любой вариант;
+   «μου (ἐμοῦ)» оба варианта; «ἐστίν~ἐστί» после «~» другие верные ответы */
+function cellParse(c){
+  const [show, ...alts] = c.split('~'), acc = new Set([show, ...alts]);
+  const m = show.match(/^(\S+) \((.+)\)$/); if(m){ acc.add(m[1]); acc.add(m[2]); }
+  [...acc].forEach(x => {
+    if(x.includes('(ν)')){ acc.add(x.replace('(ν)', '')); acc.add(x.replace('(ν)', 'ν')); }
+    if(x.includes('/')) x.split('/').forEach(y => acc.add(y));
+  });
+  return {show, acc: [...acc]};
+}
+const cellShow = c => esc(cellParse(c).show).replace(/_(.)/gu, '<u>$1</u>');
+// Сравнение ответа: без регистра, σ = ς, лишние пробелы не важны. Подписная йота проверяется всегда;
+// ударения, придыхания и диарезис только при строгой проверке. Знаки над буквой приводятся к одному порядку
+const MARK_GRP = {'̓': 1, '̔': 1, '̈': 2, '́': 3, '̀': 3, '͂': 3, 'ͅ': 4};
+const LOOSE = /[̓̔̈́̀͂]/g;
+const sortMarks = t => t.replace(/(\P{M})(\p{M}+)/gu, (m, b, ms) => b + [...ms].sort((x, y) => (MARK_GRP[x] || 9) - (MARK_GRP[y] || 9)).join(''));
+function canon(s, strict){
+  let t = String(s).normalize('NFD').replace(/_/g, '').toLowerCase().replace(/ς/g, 'σ')
+    .replace(/[-—]/g, '–').replace(/['ʼ᾽᾿]/g, '’').replace(/\s+/g, ' ').trim();
+  if(!strict) t = t.replace(LOOSE, '');
+  return sortMarks(t);
+}
+const cellOk = (c, input, strict) => { const v = canon(input || '', strict); return !!v && cellParse(c).acc.some(a => canon(a, strict) === v); };
+// Ввод: конечная сигма ставится сама, знак добавляется к последней букве (повторное нажатие снимает его)
+const finalS = s => s.replace(/σ(?![\p{L}\p{M}])/gu, 'ς');
+function addMark(s, c){
+  const m = s.normalize('NFD').match(/^([\s\S]*?)(\p{L})(\p{M}*)$/u);
+  if(!m) return s;
+  let ms = [...m[3]];
+  if(ms.includes(c)) ms = ms.filter(x => x !== c);
+  else { ms = ms.filter(x => MARK_GRP[x] !== MARK_GRP[c]); ms.push(c); }
+  return sortMarks(m[1] + m[2] + ms.join('')).normalize('NFC');
+}
+const delLast = s => s.normalize('NFD').replace(/[\s\S]\p{M}*$/u, '').normalize('NFC');
+
+/* ---------- Экранная греческая клавиатура ---------- */
+// Буквы по алфавиту, подписная йота, прочерк, пробел, стирание. Ряд знаков (придыхания, ударения, диарезис) при строгой проверке.
+// С клавиатуры компьютера: латиница по физическим клавишам (работает при любой раскладке, в том числе русской)
+const KB = {target: null};
+const KB_ROWS = ['αβγδεζηθ', 'ικλμνξοπ', 'ρστυφχψω'];
+const KB_MARKS = [['\u0313', '᾿', 'тонкое придыхание', 'тонкое'], ['\u0314', '῾', 'густое придыхание', 'густое'], ['\u0301', '´', 'острое ударение', 'острое'], ['\u0300', '`', 'тяжёлое ударение', 'тяжёлое'], ['\u0342', '῀', 'облечённое ударение', 'облеч.'], ['\u0308', '¨', 'диарезис', 'диарез.']];
+const LAT = {KeyA: 'α', KeyB: 'β', KeyG: 'γ', KeyD: 'δ', KeyE: 'ε', KeyZ: 'ζ', KeyH: 'η', KeyQ: 'θ', KeyI: 'ι', KeyK: 'κ', KeyL: 'λ', KeyM: 'μ',
+  KeyN: 'ν', KeyC: 'ξ', KeyO: 'ο', KeyP: 'π', KeyR: 'ρ', KeyS: 'σ', KeyT: 'τ', KeyU: 'υ', KeyF: 'φ', KeyX: 'χ', KeyY: 'ψ', KeyW: 'ω'};
+const KB_HELP = `<div class="kb-help" hidden><p><b>С клавиатуры компьютера</b> (при любой раскладке):</p>
+  <p class="gr kb-map">${Object.entries(LAT).map(([c, g]) => `<span><kbd>${c.slice(3).toLowerCase()}</kbd> ${g}</span>`).join('')}</p>
+  <p class="kb-map"><span><kbd>)</kbd> тонкое придыхание</span><span><kbd>(</kbd> густое</span><span><kbd>/</kbd> острое ударение</span><span><kbd>\\</kbd> тяжёлое</span><span><kbd>=</kbd> облечённое</span><span><kbd>|</kbd> подписная йота</span><span><kbd>+</kbd> диарезис</span><span><kbd>-</kbd> прочерк</span><span><kbd>Tab</kbd> следующая клетка</span><span><kbd>Enter</kbd> проверить</span></p></div>`;
+function kbHTML(o){
+  const key = (attr, label, aria, cls) => `<button type="button" class="key${cls ? ' ' + cls : ''}" ${attr}${aria ? ` aria-label="${aria}"` : ''}>${label}</button>`;
+  return `<div class="kb${o.dock ? ' dock' : ''}" role="group" aria-label="Греческая клавиатура">
+    <div class="kb-top"><span class="meta">${o.marks ? 'Знак ставится на последнюю букву' : 'Ударения и придыхания можно не ставить'}</span><button type="button" class="kb-q" data-kbhelp aria-label="Как печатать с клавиатуры компьютера">?</button></div>
+    ${KB_HELP}
+    ${o.marks ? `<div class="kb-row marks">${KB_MARKS.map(([c, s, l, sh]) => key(`data-mk="${c}"`, `<span>${s}</span><small>${sh}</small>`, l, 'mk')).join('')}</div>` : ''}
+    ${KB_ROWS.map(r => `<div class="kb-row">${[...r].map(ch => key(`data-ch="${ch}"`, ch, '', 'gr')).join('')}</div>`).join('')}
+    <div class="kb-row fn">${key('data-mk="ͅ"', '<span class="gr">ͺ</span><small>йота</small>', 'подписная йота', 'mk')}
+      ${o.dash ? key('data-fn="dash"', '–', 'прочерк: окончания нет', '') : ''}
+      ${key('data-fn="space"', '<small>пробел</small>', 'пробел', 'wide2')}
+      ${key('data-fn="back"', '⌫', 'стереть', '')}
+      ${o.next ? key('data-fn="next"', '→', 'следующая клетка', '') : ''}</div></div>`;
+}
+function kbPress(b){
+  const t = KB.target; if(!t) return;
+  if(b.dataset.ch) t.ins(b.dataset.ch);
+  else if(b.dataset.mk) t.mark(b.dataset.mk);
+  else if(t[b.dataset.fn]) t[b.dataset.fn]();
+}
+// Нажатие на экранную клавишу не уводит фокус из поля ввода
+document.addEventListener('pointerdown', e => { const b = e.target.closest('.kb .key'); if(b){ e.preventDefault(); kbPress(b); } });
+document.addEventListener('click', e => {
+  const b = e.target.closest('.kb .key'); if(b && e.detail === 0) kbPress(b); // нажатие с клавиатуры (Enter на кнопке)
+  const q = e.target.closest('[data-kbhelp]'); if(q){ const h = q.closest('.kb').querySelector('.kb-help'); h.hidden = !h.hidden; }
+});
+function kbKey(e){
+  const t = KB.target, c = e.code, sh = e.shiftKey;
+  if(LAT[c] && t.ins) t.ins(LAT[c]);
+  else if(c === 'Digit0' && sh) t.mark('̓');
+  else if(c === 'Digit9' && sh) t.mark('̔');
+  else if(c === 'Slash' && !sh) t.mark('́');
+  else if(c === 'Backslash') t.mark(sh ? 'ͅ' : '̀');
+  else if(c === 'Equal') t.mark(sh ? '̈' : '͂');
+  else if(c === 'Minus' && !sh && t.dash) t.dash();
+  else if(c === 'Backspace') t.back();
+  else if(c === 'Space' && t.space) t.space();
+  else if((c === 'Tab' || c === 'ArrowRight' || c === 'ArrowDown') && t.next) t.next(c === 'Tab' && sh);
+  else if((c === 'ArrowLeft' || c === 'ArrowUp') && t.next) t.next(true);
+  else if((c === 'Enter' || c === 'NumpadEnter') && t.enter) t.enter();
+  else return false;
+  return true;
+}
+document.addEventListener('keydown', e => {
+  const t = KB.target;
+  if(!t || e.ctrlKey || e.metaKey || e.altKey || !t.wants(e)) return;
+  if(kbKey(e)) e.preventDefault();
+});
+// Поле ввода с греческой клавиатурой (поиск в словаре)
+function inputTarget(inp){
+  const edit = f => {
+    const a = inp.selectionStart ?? inp.value.length, b = inp.selectionEnd ?? a;
+    const [before, after] = f(inp.value.slice(0, a).replace(/ς/g, 'σ'), inp.value.slice(b).replace(/ς/g, 'σ'));
+    inp.value = finalS(before + after); inp.setSelectionRange(before.length, before.length);
+    inp.dispatchEvent(new Event('input', {bubbles: true}));
+  };
+  return {
+    wants: e => document.activeElement === inp,
+    ins: ch => edit((b, a) => [b + ch, a]), mark: c => edit((b, a) => [addMark(b, c), a]),
+    back: () => edit((b, a) => [delLast(b), a]), space: () => edit((b, a) => [b + ' ', a]),
+  };
+}
+
+/* ---------- Сессия: пункты по очереди ---------- */
+// Таблица: новая сначала показывается целиком, потом заполнение. Пустых клеток тем больше, чем выше ступень:
+// 0 четверть (не меньше 2), 1 40%, 2 60%, 3 80%, с 4-й вся таблица. Ошибка: ступень 0, трудное, таблица возвращается
+// в конце сессии, а клетки с ошибками снова пустые. Правило и предлог: «Знаю» / «Повторить», как у слов
+const FRAC = [0.25, 0.4, 0.6, 0.8, 1, 1, 1];
+const DS = {deck: [], idx: 0, failed: new Set(), wrong: new Map(), task: null, size: 0, known: 0, phase: '', blanks: [], vals: {}, cur: '', peek: false, set: '', title: ''};
+function pickBlanks(d, level, force){
+  const cells = [];
+  d.grid.forEach((row, r) => row.forEach((c, j) => { if(c) cells.push(r + ':' + j); }));
+  const out = new Set();
+  if(d.lines){
+    const lines = d.rows.map((_, r) => d.cols.map((_, j) => r + ':' + j)).concat(d.cols.map((_, j) => d.rows.map((_, r) => r + ':' + j)));
+    if(level >= 2) cells.forEach(x => out.add(x)); else shuffle(lines).slice(0, level + 1).forEach(l => l.forEach(x => out.add(x)));
+  } else {
+    const n = Math.min(cells.length, Math.max(2, Math.round(cells.length * FRAC[Math.min(level, 6)])));
+    shuffle(cells).slice(0, n).forEach(x => out.add(x));
+  }
+  (force || []).forEach(x => out.add(x));
+  return cells.filter(x => out.has(x)); // по порядку чтения: строка за строкой
+}
+const cellAt = (d, key) => { const [r, j] = key.split(':').map(Number); return d.grid[r][j]; };
+// Таблица как в книге: падежи по строкам, роды по столбцам, сверху склонение
+function drillTable(d, mode){
+  const fill = mode === 'fill', chk = mode === 'check', showInfo = d.info && !fill;
+  const blanks = new Set(fill || chk ? DS.blanks : []);
+  const strict = strictOn();
+  const top = d.groups ? `<tr class="decl"><th></th>${d.groups.map(([t, n]) => `<th colspan="${n}">${esc(t)}</th>`).join('')}</tr>`
+    : d.decl ? `<tr class="decl"><th></th>${d.decl.map(x => `<th>${esc(x)}</th>`).join('')}</tr>` : '';
+  const td = (c, key) => {
+    if(!c) return '<td class="none"></td>';
+    if(!blanks.has(key)) return `<td>${cellShow(c)}</td>`;
+    const v = DS.vals[key] || '';
+    if(fill) return `<td class="blank"><button type="button" class="cin${key === DS.cur ? ' on' : ''}" data-c="${key}" aria-label="Клетка ${d.rows[+key.split(':')[0]]}, ${d.cols[+key.split(':')[1]]}">${DS.peekShow ? `<span class="peek">${cellShow(c)}</span>` : esc(finalS(v))}</button></td>`;
+    const ok = cellOk(c, v, strict), same = canon(v, true) === canon(cellParse(c).show, true);
+    return `<td class="${ok ? 'ok' : 'err'}">${ok ? (same ? cellShow(c) : `${cellShow(c)}<small class="was">вы: ${esc(finalS(v))}</small>`)
+      : `${v ? `<s>${esc(finalS(v))}</s>` : '<s class="empty">пусто</s>'}<span class="right">${cellShow(c)}</span>`}</td>`;
+  };
+  return `<div class="tbl-wrap"><table class="ptab${d.grid[0].length > 3 ? ' many' : ''}">
+    <thead>${top}<tr><th></th>${d.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${d.grid.map((row, r) => `<tr${r === 4 && d.rows.length === 8 ? ' class="pl"' : ''}><th class="rl${d.rowsGr ? ' gr' : ''}">${esc(d.rows[r]).replace(/^(.+? п\.) (.+)$/, '$1<br>$2')}${showInfo && d.info[r] ? `<small>${esc(d.info[r])}</small>` : ''}</th>${row.map((c, j) => td(c, r + ':' + j)).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+const srcLine = d => `Учебник, с. ${esc(d.p)} · глава ${d.ch}`;
+function drillTrainerHTML(task){
+  return `<div class="pbar thin"><i id="dBar"></i></div>
+    <div class="row between"><span class="meta" id="dMeta"></span><span class="meta" id="dMode">${strictOn() ? 'Ударения и придыхания проверяются' : 'Ударения и придыхания не проверяются'}</span></div>
+    <div id="dArea"></div>
+    <div class="done-box" id="dDone" hidden></div>
+    ${task ? '' : '<p class="meta center" id="dStats"></p>'}`;
+}
+function startDrills(task, list){
+  DS.task = task; DS.idx = 0; DS.known = 0; DS.failed.clear(); DS.wrong.clear();
+  if(task){ const d = taskDeck(task); DS.deck = shuffle(d.filter(x => dRec(x.k))).concat(d.filter(x => !dRec(x.k))); }
+  else DS.deck = list.slice();
+  DS.size = DS.deck.length;
+  if(!DS.deck.length) return dFinish();
+  dItem();
+}
+function dItem(){
+  const d = DS.deck[DS.idx], r = dRec(d.k);
+  DS.peek = false; DS.peekShow = false; DS.vals = {};
+  if(d.kind === 't'){
+    DS.phase = !r && !DS.failed.has(d.k) ? 'study' : 'fill';
+    DS.blanks = pickBlanks(d, DS.failed.has(d.k) ? 0 : (r ? r.level || 0 : 0), DS.wrong.get(d.k));
+    DS.cur = DS.blanks[0];
+  } else DS.phase = 'front';
+  $('#dMeta').textContent = `${DS.idx + 1} из ${DS.deck.length}`;
+  $('#dBar').style.width = (DS.idx / DS.deck.length * 100) + '%';
+  dDraw();
+  dStats();
+}
+function dDraw(){
+  const d = DS.deck[DS.idx], area = $('#dArea'); if(!d || !area) return;
+  const top = `<div class="dc-top"><span class="kicker">гл. ${d.ch} · ${KIND_RU[d.kind]}</span><span class="lvl">${dlvl(d.k)}</span></div>`;
+  KB.target = null;
+  if(d.kind === 't'){
+    const ph = DS.phase, n = DS.blanks.length;
+    const res = ph === 'check' ? DS.blanks.filter(k => !cellOk(cellAt(d, k), DS.vals[k], strictOn())).length : 0;
+    area.innerHTML = `<section class="card dcard dtab">${top}<h2>${esc(d.t)}</h2>${d.sub ? `<p class="hint">${esc(d.sub)}</p>` : ''}
+      ${drillTable(d, ph === 'study' ? 'view' : ph === 'fill' ? 'fill' : 'check')}
+      ${ph !== 'fill' && d.note ? `<p class="hint">${esc(d.note)}</p>` : ''}
+      <p class="src">${srcLine(d)}</p>
+      ${ph === 'study' ? `<p class="hint">Новая таблица: посмотрите её целиком и проговорите вслух, потом заполните пустые клетки.</p><button type="button" class="btn primary wide" id="dFill">Заполнить</button>`
+      : ph === 'fill' ? `<p class="hint">Пустых клеток: ${n}. ${DS.peek ? '<b class="bad-t">Вы подсмотрели: таблица вернётся в конце как «Повторить».</b>' : 'Нажмите клетку и печатайте.'}</p>
+        <div class="row"><button type="button" class="btn" id="dPeek">${DS.peekShow ? 'Скрыть ответы' : 'Посмотреть таблицу'}</button><button type="button" class="btn primary" id="dCheck">Проверить</button></div>`
+      : `<p class="lead ${res || DS.peek ? 'bad-t' : 'ok'}">${res ? `Ошибок: ${res} из ${n}. Таблица вернётся в конце, клетки с ошибками будут снова пустыми.` : DS.peek ? 'Всё верно, но вы подсмотрели: таблица вернётся в конце.' : `${ICON.check}Всё верно. Знаю.`}</p>
+        <button type="button" class="btn primary wide" id="dNext">Дальше</button>`}
+    </section>
+    ${ph === 'fill' ? `<div class="kb-dock">${kbHTML({marks: strictOn(), dash: true, next: true, dock: true})}</div>` : ''}`;
+    if(ph === 'study') $('#dFill').onclick = () => { DS.phase = 'fill'; dDraw(); };
+    if(ph === 'fill'){
+      $('#dPeek').onclick = () => { DS.peek = true; DS.peekShow = !DS.peekShow; dDraw(); };
+      $('#dCheck').onclick = dCheck;
+      area.querySelector('.ptab').onclick = e => { const b = e.target.closest('[data-c]'); if(b){ DS.cur = b.dataset.c; dMarkCur(); } };
+      KB.target = tableTarget;
+      dMarkCur(true);
+    }
+    if(ph === 'check'){ KB.target = tableTarget; $('#dNext').onclick = dNextItem; $('#dNext').focus({preventScroll: true}); }
+    return;
+  }
+  const back = d.kind === 'p'
+    ? `<div class="da gr-lg">${esc(d.a)}</div>${d.f ? `<p class="hint">Перед гласной: <span class="gr">${esc(d.f)}</span></p>` : ''}<p class="src">${esc(d.g)}: лексический минимум, с. ${esc(d.p)}. Значения из словаря учебника</p>`
+    : `<p class="da">${esc(d.a)}</p>${d.ex ? `<p class="dex">${esc(d.ex)}</p>` : ''}<p class="src">${srcLine(d)}</p>`;
+  const front = d.kind === 'p'
+    ? `<div class="dprep"><span class="gr">${esc(d.g)}</span><small>+ ${esc(d.c)}</small></div><p class="dq">Что значит?</p>`
+    : `<h2>${esc(d.t)}</h2><p class="dq">${esc(d.q)}</p>`;
+  area.innerHTML = `<section class="card dcard">${top}${front}
+    ${DS.phase === 'front' ? `<button type="button" class="btn primary wide" id="dShow">Показать ответ</button>`
+      : `<div class="dans">${back}</div><div class="grid2"><button type="button" class="btn bad" id="dAgain">Повторить</button><button type="button" class="btn good" id="dKnow">Знаю</button></div>`}</section>`;
+  if(DS.phase === 'front'){ $('#dShow').onclick = () => { DS.phase = 'back'; dDraw(); }; $('#dShow').focus({preventScroll: true}); }
+  else { $('#dKnow').onclick = () => dRate(true); $('#dAgain').onclick = () => dRate(false); }
+}
+// Ввод в клетки таблицы
+const tableTarget = {
+  wants: e => DS.phase === 'check' ? e.code === 'Enter' || e.code === 'NumpadEnter' : DS.phase === 'fill' && !e.target.closest('input, textarea, select, dialog'),
+  ins: ch => dSet(v => v + ch), mark: c => dSet(v => addMark(v, c)), back: () => dSet(delLast),
+  space: () => dSet(v => v && !v.endsWith(' ') ? v + ' ' : v), dash: () => dSet(() => '–'),
+  next: prev => { const i = DS.blanks.indexOf(DS.cur), n = DS.blanks.length; DS.cur = DS.blanks[(i + (prev ? n - 1 : 1)) % n]; dMarkCur(); },
+  enter: () => DS.phase === 'fill' ? dCheck() : dNextItem(),
+};
+function dSet(f){
+  if(DS.phase !== 'fill' || !DS.cur) return;
+  DS.vals[DS.cur] = f(DS.vals[DS.cur] || '');
+  const b = $(`[data-c="${DS.cur}"]`); if(b && !DS.peekShow) b.textContent = finalS(DS.vals[DS.cur]);
+}
+function dMarkCur(first){
+  $$('.cin').forEach(b => b.classList.toggle('on', b.dataset.c === DS.cur));
+  const b = $(`[data-c="${DS.cur}"]`);
+  if(b && !first) b.scrollIntoView({block: 'nearest'});
+}
+function dCheck(){
+  const d = DS.deck[DS.idx], strict = strictOn();
+  const wrong = DS.blanks.filter(k => !cellOk(cellAt(d, k), DS.vals[k], strict));
+  const ok = !wrong.length && !DS.peek;
+  const patch = srsPatch(dRec(d.k), DS.failed.has(d.k), ok);
+  if(patch) setDrill(d.k, patch);
+  if(ok){ if(!DS.failed.has(d.k)) DS.known++; DS.wrong.delete(d.k); }
+  else { DS.failed.add(d.k); DS.wrong.set(d.k, wrong); DS.deck.push(d); }
+  DS.phase = 'check'; DS.peekShow = false; dDraw();
+}
+function dRate(ok){
+  const d = DS.deck[DS.idx];
+  const patch = srsPatch(dRec(d.k), DS.failed.has(d.k), ok);
+  if(patch) setDrill(d.k, patch);
+  if(ok){ if(!DS.failed.has(d.k)) DS.known++; }
+  else { DS.failed.add(d.k); DS.deck.splice(Math.min(DS.idx + 4, DS.deck.length), 0, d); }
+  dNextItem();
+}
+function dNextItem(){
+  DS.idx++;
+  if(DS.idx >= DS.deck.length) dFinish(); else { dItem(); window.scrollTo({top: 0}); }
+}
+function dStats(){
+  const el = $('#dStats'); if(!el) return;
+  const open = dOpenItems(); let st = 0, sure = 0, due = 0;
+  open.forEach(d => { const r = dRec(d.k); if(r){ st++; if((r.level || 0) >= SURE) sure++; if(r.due <= today()) due++; } });
+  el.textContent = `Открыто ${open.length} · начато ${st} · уверенно ${sure} · к повторению ${due}`;
+}
+function dFinish(){
+  KB.target = null;
+  $('#dArea').innerHTML = ''; $('#dDone').hidden = false; $('#dBar').style.width = '100%'; $('#dMeta').textContent = '';
+  const box = $('#dDone'), tomorrow = ITEMS.filter(d => dRec(d.k) && dRec(d.k).due <= addDays(today(), 1)).length;
+  if(DS.task){
+    if(DS.deck.length) markTask('drills', DS.size);
+    box.innerHTML = taskDoneHTML(DS.deck.length ? `Задание выполнено: ${DS.size} ${plural(DS.size, ITEMS_F)}. Завтра к повторению: <b>${tomorrow}</b>.` : 'Эти пункты уже пройдены.');
+    return;
+  }
+  box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>${DS.size ? `Пройдено: <b>${DS.size}</b> ${plural(DS.size, ITEMS_F)}, с первого раза: <b>${DS.known}</b>. Завтра к повторению: <b>${tomorrow}</b>.` : DS.set === 'srs' ? 'На сегодня всё повторено, новых пунктов из пройденных глав нет.' : 'Здесь пока нечего учить.'}</p>
+    <div class="row center">${DS.size ? '<button type="button" class="btn primary" id="dAgainAll">Ещё раз</button>' : ''}<a class="btn" href="#/drills">Все таблицы и правила</a></div>`;
+  if($('#dAgainAll')) $('#dAgainAll').onclick = () => { $('#dDone').hidden = true; startDrills(null, drillList(route())); };
+  dStats();
+}
+// Набор пунктов по адресу: k=ключи (и p:N, ch:N), set=srs (со сроком и новые), set=hard
+function drillList(r){
+  const set = r.q.get('set') || '', k = r.q.get('k');
+  DS.set = k ? '' : set;
+  if(k) return itemsOf(k);
+  if(set === 'hard') return shuffle(ITEMS.filter(d => (dRec(d.k) || {}).hard));
+  return shuffle(ITEMS.filter(d => isDDue(d.k))).concat(drillsFresh());
+}
+function vDrill(r){
+  const k = r.q.get('k') || '', view = r.q.get('m') === 'view';
+  const one = ITEM.get(k) || REF.get(k);
+  const ch = one ? one.ch : 0, backHref = r.q.get('from') === 'list' || !ch ? '#/drills' : '#/ch/' + ch;
+  if(view && one && one.grid) return `${subHead(backHref, ch && !r.q.get('from') ? 'Глава ' + ch : 'Таблицы и правила', esc(one.t), esc(one.sub || ''))}
+    <div class="trainer wide-t"><section class="card dcard dtab">${one.kind === 'v' ? '<span class="kicker">Для справки, заучивать не нужно</span>' : `<div class="dc-top"><span class="kicker">гл. ${one.ch} · таблица</span><span class="lvl">${dlvl(one.k)}</span></div>`}
+      ${drillTable(one, 'view')}${one.note ? `<p class="hint">${esc(one.note)}</p>` : ''}<p class="src">${srcLine(one)}</p>
+      ${one.kind === 't' ? `<a class="btn primary wide" href="#/drill?k=${one.k}">${ICON.pen}Учить</a>` : ''}</section></div>`;
+  const list = drillList(r), m = k.match(/^(p|ch):(\d+)$/), lch = m ? +m[2] : list.length ? list[0].ch : 0;
+  const title = !k ? (r.q.get('set') === 'hard' ? 'Трудные' : 'Повторение')
+    : m ? (m[1] === 'p' ? `Предлоги с падежами, глава ${lch}` : `Глава ${lch}: таблицы и правила`)
+    : list.length === 1 ? list[0].t : `Таблицы и правила: ${list.length} ${plural(list.length, ITEMS_F)}`;
+  const bh = !k || r.q.get('from') === 'list' || !lch ? '#/drills' : '#/ch/' + lch;
+  return `${subHead(bh, bh === '#/drills' ? 'Таблицы и правила' : 'Глава ' + lch, esc(title),
+    k ? (m && m[1] === 'p' ? 'По карточке на каждый падеж, как советует автор (с. 76)' : '') : 'Пункты, у которых подошёл срок, и новые из глав до текущей')}<div class="trainer">${drillTrainerHTML(false)}</div>`;
+}
+function initDrill(r){ if(r.q.get('m') === 'view') return; startDrills(null, drillList(r)); }
+
+/* ---------- Раздел «Таблицы и правила»: список по главам ---------- */
+const DOT_D = {sure: 'k', learn: 's', hard: 'h', new: ''};
+function drillRow(d){
+  const st = dState(d.k), due = isDDue(d.k);
+  return `<li class="drow"><span class="dot ${DOT_D[st]}"></span><span class="tt"><b>${esc(d.t)}</b><small>${KIND_RU[d.kind]} · с. ${esc(d.p)}${due ? ' · к повторению' : ''}</small></span>
+    <span class="acts">${d.kind === 't' ? `<a class="btn sm ghost" href="#/drill?k=${d.k}&m=view&from=list" aria-label="Посмотреть таблицу">${ICON.table}</a>` : ''}<a class="btn sm" href="#/drill?k=${d.k}&from=list">Учить</a></span></li>`;
+}
+function vDrills(){
+  const cur = curCh(), open = dOpenItems(), st = open.filter(d => dRec(d.k)).length, due = ITEMS.filter(d => isDDue(d.k)).length;
+  const chs = [...new Set(ITEMS.map(d => d.ch).concat(REFS.map(d => d.ch)))].sort((a, b) => a - b);
+  return `${subHead('#/course', 'Курс', 'Таблицы и правила', 'Что автор велит заучить в главах 3–14: таблицы окончаний и местоимений, правила, предлоги с падежами')}
+    <section class="card"><div class="plan-top"><h2>Повторение</h2><span class="muted">начато ${st} из ${open.length}</span></div>${bar(st, open.length, 'good')}
+      <p class="lead">${due ? `К повторению: ${due}. ` : ''}${drillsFresh().length ? `Новых на сегодня: ${drillsFresh().length}.` : 'Новые пункты придут с главами.'}</p>
+      <div class="row"><a class="btn primary" href="#/drill?set=srs">${ICON.cards}Повторение</a>${ITEMS.some(d => (dRec(d.k) || {}).hard) ? `<a class="btn" href="#/drill?set=hard">Трудные</a>` : ''}</div>
+      <p class="hint">Таблицы заполняются с экранной греческой клавиатуры. ${strictOn() ? 'Ударения и придыхания проверяются.' : 'Ударения и придыхания не проверяются; включить проверку можно в профиле.'}</p></section>
+    ${chs.map(n => { const its = ITEMS.filter(d => d.ch === n), refs = REFS.filter(d => d.ch === n), s = chStatus(n);
+      const ds = its.filter(d => d.kind !== 'p'), ps = its.filter(d => d.kind === 'p');
+      return `<section class="card dlist${s === 'ahead' ? ' ahead' : ''}"><div class="plan-top"><h2>Глава ${n}</h2><span class="muted">${s === 'ahead' ? 'впереди' : `начато ${its.filter(d => dRec(d.k)).length} из ${its.length}`}</span></div>
+        <ul class="dl">${ds.map(drillRow).join('')}${ps.length ? `<li class="drow"><span class="dot ${ps.every(d => dState(d.k) === 'sure') ? 'k' : ps.some(d => dRec(d.k)) ? 's' : ''}"></span><span class="tt"><b>Предлоги с падежами: ${esc([...new Set(ps.map(d => d.g))].join(', '))}</b><small>${ps.length} ${plural(ps.length, CARDS_F)}, начато ${ps.filter(d => dRec(d.k)).length}</small></span><span class="acts"><a class="btn sm" href="#/drill?k=p:${n}&from=list">Учить</a></span></li>` : ''}
+        ${refs.map(d => `<li class="drow ref"><span class="dot"></span><span class="tt"><b>${esc(d.t)}</b><small>для справки, заучивать не нужно · с. ${esc(d.p)}</small></span><span class="acts"><a class="btn sm ghost" href="#/drill?k=${d.k}&m=view&from=list">Посмотреть</a></span></li>`).join('')}</ul>
+        ${s === 'ahead' ? `<p class="hint">Глава впереди: потренироваться можно, в план новые пункты придут, когда глава станет текущей (сейчас глава ${cur}).</p>` : ''}</section>`; }).join('')}`;
+}
+const CARDS_F = ['карточка', 'карточки', 'карточек'];
+// Карточка «Таблицы и правила» в курсе
+function drillsCard(){
+  const open = dOpenItems(), st = open.filter(d => dRec(d.k)).length, due = ITEMS.filter(d => isDDue(d.k)).length;
+  return `<section class="card parts-card"><div class="plan-top"><h2>Таблицы и правила</h2><span class="muted">${open.length ? `начато ${st} из ${open.length}` : 'с главы 3'}</span></div>
+    <p class="lead">${open.length ? `Таблицы окончаний и местоимений, правила и предлоги с падежами, которые автор велит заучить. Открыто ${open.length} из ${ITEMS.length}.${due ? ` К повторению: ${due}.` : ''}` : 'Открываются по главам учебника, первые в главе 3.'}</p>
+    ${open.length ? bar(st, open.length, 'good') : ''}
+    <div class="row"><a class="btn primary" href="#/drill?set=srs">${ICON.cards}Повторение</a><a class="btn" href="#/drills">${ICON.table}По главам</a></div></section>`;
 }
 
 /* ---------- Словарь ---------- */
@@ -762,7 +1168,8 @@ function vDict(){
     <div class="cols"><div class="col">
       <div class="dict-tools">
         ${seg('dmode', [['min', `Минимум (${MINW.length})`], ['all', 'Весь словарь']], u.mode, 'Какие слова показывать')}
-        <input class="inp" id="d-q" type="search" placeholder="Поиск по-гречески или по-русски" autocomplete="off" value="${esc(u.q)}">
+        <div class="search-row"><input class="inp" id="d-q" type="search" placeholder="Поиск по-гречески или по-русски" autocomplete="off" value="${esc(u.q)}"><button type="button" class="btn kb-toggle gr" id="d-kb" aria-pressed="false" aria-label="Греческая клавиатура">αβ</button></div>
+        <div id="d-kbox" hidden>${kbHTML({})}</div>
         <div class="filters">
           <select class="inp" id="d-ch" aria-label="Глава">${opt('all', 'Все главы', u.ch)}${CHS.map(n => opt(n, 'Глава ' + n, u.ch)).join('')}</select>
           <select class="inp" id="d-f" aria-label="Частота в Новом Завете">${opt('all', 'Любая частота', u.f)}${FREQS.map(x => opt(x, x + ' раз и больше', u.f)).join('')}</select>
@@ -798,6 +1205,7 @@ function dictFilter(u){
 function initDict(){
   let timer = 0;
   const upd = () => {
+    if(!$('#d-q')) return; // экран словаря уже закрыт
     const u = {mode: DICT_UI().mode, q: $('#d-q').value, ch: $('#d-ch').value, f: $('#d-f').value, k: $('#d-k').value};
     saveLS('dict_q', u.q); saveLS('dict_ch', u.ch); saveLS('dict_f', u.f); saveLS('dict_k', u.k);
     const list = dictFilter(u), all = u.mode === 'all';
@@ -814,6 +1222,12 @@ function initDict(){
     $('#d-cards').href = '#/words?r=' + r; $('#d-quiz').href = '#/words?r=' + r + '&m=quiz';
   };
   $('#d-q').oninput = () => { clearTimeout(timer); timer = setTimeout(upd, 150); };
+  // экранная греческая клавиатура: системная клавиатура телефона при этом не открывается, на компьютере латиница печатает греческие буквы
+  $('#d-kb').onclick = () => {
+    const on = $('#d-kbox').hidden, q = $('#d-q');
+    $('#d-kbox').hidden = !on; $('#d-kb').setAttribute('aria-pressed', on);
+    if(on){ q.setAttribute('inputmode', 'none'); KB.target = inputTarget(q); q.focus(); } else { q.removeAttribute('inputmode'); KB.target = null; }
+  };
   $('#d-ch').onchange = upd; $('#d-f').onchange = upd; $('#d-k').onchange = upd;
   $$('[data-dmode]').forEach(b => b.onclick = () => { saveLS('dict_mode', b.dataset.dmode); render(true); });
   $('#d-list').onclick = e => { const t = e.target.closest('[data-w]'); if(t) openWord(+t.dataset.w); };
@@ -1489,13 +1903,19 @@ function stackCard(title, total, c, sub){
     <ul class="legend">${STATE_PARTS.map(([k, l, s]) => `<li><span class="sw ${k}"></span><span class="tt"><b>${l}</b>${s ? `<small>${s}</small>` : ''}</span><b class="n">${c[k]}</b></li>`).join('')}</ul>
   </section>`;
 }
+// «Таблицы и правила: начато N из M, уверенно K» (M: открытые пункты глав до текущей)
+function drillsProgress(){
+  const open = dOpenItems(), st = open.filter(d => dRec(d.k)).length, sure = open.filter(d => dState(d.k) === 'sure').length;
+  return `<section class="card"><div class="plan-top"><h2>Таблицы и правила</h2><span class="muted">${open.length ? `начато ${st} из ${open.length}` : 'с главы 3'}</span></div>${bar(st, open.length || 1, 'good')}
+    <p class="hint">Таблицы и правила: начато ${st} из ${open.length}, уверенно ${sure}. Уверенно: интервал повторения от двух недель.</p><a class="btn" href="#/drills">Открыть</a></section>`;
+}
 function vProgress(){
   const kn = lettersKnown(), st = streak(), cov = coverage(), learned = LEX.filter(w => isLearned(w.n)).length;
   const week = Array.from({length: 7}, (_, i) => addDays(weekStart(), i)), plans = planMap(), t = today();
   const all = {sure:0, learn:0, hard:0, new:0}; LEX.forEach(w => all[wState(w.n)]++);
   const open = openBold(), pc = {sure:0, learn:0, hard:0, new:0}; open.forEach(f => pc[fState(f.n)]++);
   const passed = passedCount(), cn = curCh();
-  return `${head('Прогресс', 'Курс, слова, основные формы, алфавит и дни занятий')}
+  return `${head('Прогресс', 'Курс, слова, таблицы и правила, основные формы, алфавит и дни занятий')}
     <div class="cols"><div class="col">
       <section class="card"><div class="plan-top"><h2>Курс</h2><span class="muted">${passed} ${plural(passed, CH_F)} из ${CHAPTERS.length}</span></div>${bar(passed, CHAPTERS.length)}
         <p class="hint">${cn > 36 ? 'Учебник пройден.' : `Текущая глава ${cn}: ${esc(chapter(cn).t)}.`}</p><a class="btn" href="${cn > 36 ? '#/course' : '#/ch/' + cn}">${cn > 36 ? 'Открыть курс' : 'Открыть главу'}</a></section>
@@ -1512,6 +1932,7 @@ function vProgress(){
           return `<span class="${s}${d === t ? ' today' : ''}${d > t ? ' future' : ''}"><small>${WDM[i]}</small><i>${s === 'full' ? ICON.check : dd}</i></span>`; }).join('')}</div>
         <span class="week-more">${ICON.cal}Календарь занятий${ICON.chev}</span>
       </section>
+      ${drillsProgress()}
       ${open.length ? stackCard('Основные формы', open.length, pc, `${plural(open.length, FORMS_F)} для заучивания открыто из ${BOLD.length}`)
         : `<section class="card"><div class="plan-top"><h2>Основные формы</h2><span class="muted">с главы 19</span></div><p class="hint">Формы для заучивания открываются вместе с главами, где учебник вводит времена глаголов.</p></section>`}
       <section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${kn} из ${LETTERS.length}</span></div>${bar(kn, LETTERS.length, 'good')}
@@ -1531,6 +1952,10 @@ function vProfile(){
     <section class="card"><h2>План на день</h2>
       <p class="hint">Порядок задаёт учебник: новые слова приходят из лексического минимума глав до текущей, по ${NEW} в день, плюс до ${NEW} слов, которые вы добавили из словаря. После главы 36 новые слова идут из словаря, от частых к редким.</p>
       <label class="check"><input type="checkbox" id="p-parts"${partsOn() ? ' checked' : ''}><span>Основные формы глаголов в плане: до ${NEW_PARTS} новых форм для заучивания в день и повторение тех, у кого подошёл срок. Формы открываются вместе с главами учебника</span></label>
+      <p class="hint">Таблицы и правила приходят в план сами: до ${NEW_DRILLS} новых таблиц и правил и до ${NEW_PREPS} карточек предлогов в день из глав до текущей, плюс повторение по сроку.</p>
+    </section>
+    <section class="card"><h2>Таблицы</h2>
+      <label class="check"><input type="checkbox" id="p-strict"${strictOn() ? ' checked' : ''}><span>Проверять ударения и придыхания. Без проверки сверяются только буквы и подписная йота: автор пишет, что знать ударения необязательно (с. 31). Правильная форма со всеми знаками показывается после проверки в любом случае</span></label>
     </section>
     <section class="card"><h2>Оформление</h2>
       <div class="seg3" role="radiogroup" aria-label="Тема">${[['light','Светлая'],['dark','Тёмная'],['auto','Как в системе']].map(([k, l]) =>
@@ -1552,7 +1977,7 @@ function vProfile(){
       <button type="button" class="btn" data-act="save-pass">Сменить пароль</button></div></details>
     <button type="button" class="btn wide" data-act="logout">Выйти</button>
     <details class="fold card"><summary><span>Удаление аккаунта</span>${ICON.chev}</summary><div class="fold-body">
-      <p class="hint">Вместе с аккаунтом удалится весь прогресс: слова, основные формы, буквы, главы и планы. Вернуть их будет нельзя.</p>
+      <p class="hint">Вместе с аккаунтом удалится весь прогресс: слова, таблицы и правила, основные формы, буквы, главы и планы. Вернуть их будет нельзя.</p>
       <button type="button" class="btn danger" data-act="delete-account">Удалить аккаунт и все данные</button></div></details>
     <p class="hint"><a href="/privacy.html" target="_blank" rel="noopener">Политика конфиденциальности</a></p>
     </div></div>`;
@@ -1565,6 +1990,7 @@ window.addEventListener('hashchange', () => { if(route().name === 'profile' && S
 document.addEventListener('change', e => {
   if(e.target.name === 'p-theme') setTheme(e.target.value);
   if(e.target.id === 'p-parts') savePlanSettings({parts_off: !e.target.checked}, e.target);
+  if(e.target.id === 'p-strict') saveUserSetting({strict_marks: e.target.checked});
 });
 // Выключатель основных форм хранится в профиле; задание на сегодня убирается или добавляется
 async function savePlanSettings(patch, el){
@@ -1575,6 +2001,11 @@ async function savePlanSettings(patch, el){
     toast('Сохранено. План на сегодня обновлён');
     render(true);
   } catch(e){ toast(errText(e)); render(true); }
+}
+async function saveUserSetting(patch){
+  try { const r = await pb.collection('users').update(me().id, patch); pb.authStore.save(pb.authStore.token, r); toast('Сохранено'); }
+  catch(e){ toast(navigator.onLine ? errText(e) : 'Нет связи: настройка не сохранилась'); }
+  render(true);
 }
 // открытый блок «Приглашения» остаётся открытым после перерисовки
 document.addEventListener('toggle', e => { const f = e.target.dataset && e.target.dataset.fold; if(f) e.target.open ? UI.folds.add(f) : UI.folds.delete(f); }, true);
