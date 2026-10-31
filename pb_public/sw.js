@@ -1,7 +1,7 @@
 // Сервис-воркер: хранит оболочку приложения, шрифты и данные учебника, чтобы приложение открывалось и без интернета.
 // Ответы сервера (/api/) никогда не кэшируются.
-const VERSION = 'greek-v4';
-const SHELL = ['/', '/index.html', '/app.css?v=4', '/app.js?v=4', '/vendor/pocketbase.umd.js', '/manifest.webmanifest',
+const VERSION = 'greek-v5';
+const SHELL = ['/', '/index.html', '/app.css?v=4', '/app.js?v=5', '/vendor/pocketbase.umd.js', '/manifest.webmanifest',
   '/data/letters.js?v=1', '/data/words.js?v=1', '/data/chapters.js?v=1', '/data/dictionary.js?v=1', '/data/parts.js?v=1', '/data/course.js?v=1', '/icons/icon-192.png?v=1', '/icons/favicon-32.png?v=1',
   '/fonts/GentiumPlus-Regular.woff2', '/fonts/GentiumPlus-Bold.woff2',
   '/fonts/golos-text-cyrillic-400-normal.woff2', '/fonts/golos-text-cyrillic-500-normal.woff2', '/fonts/golos-text-cyrillic-600-normal.woff2',

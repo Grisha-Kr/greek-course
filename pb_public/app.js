@@ -669,7 +669,7 @@ function vTask(r){
   if(!t) return `${subHead('#/', 'Сегодня', 'Задание')}<section class="card"><p>Этого задания сегодня нет в плане.</p><a class="btn" href="#/">К плану</a></section>`;
   const i = taskInfo(t);
   if(t.key === 'alphabet') return `${subHead('#/', 'Сегодня', 'Алфавит', 'Карточки трудных и ещё не выученных букв')}<div class="trainer">${abcCardsHTML(true)}</div>`;
-  if(t.key === 'parts') return `${subHead('#/', 'Сегодня', 'Основные формы', 'Новые полужирные формы и формы, у которых подошёл срок повторения')}<div class="trainer">${pCardsHTML(true)}</div>`;
+  if(t.key === 'parts'){ PS.ch = 0; return `${subHead('#/', 'Сегодня', 'Основные формы', 'Новые полужирные формы и формы, у которых подошёл срок повторения')}<div class="trainer">${pCardsHTML(true)}</div>`; }
   return `${subHead('#/', 'Сегодня', esc(i.title.replace(/ · \d+$/, '')), t.key === 'new' ? (i.sub ? 'Новые слова: ' + esc(i.sub) : 'Новые слова по порядку учебника') : 'Слова, у которых подошёл срок повторения')}<div class="trainer">${wCardsHTML(true)}</div>`;
 }
 function initTask(r){
@@ -726,7 +726,7 @@ function vChapter(r){
   const fs = formsOfChapter(c.n);
   const forms = k.pp || fs.length ? `<section class="card"><h2>Основные формы</h2>${k.pp ? `<p class="lead">Глава открывает: ${esc(k.pp[0].toLowerCase() + k.pp.slice(1))}</p>` : ''}
       ${fs.length ? `<p class="hint">Новые формы для заучивания (полужирные в таблице книги): ${fs.length}</p><ul class="form-list">${fs.map(f => `<li><span class="gr">${esc(f.g)}</span> <small>${esc(formName(f).toLowerCase())} от <span class="gr">${esc(f.v.v)}</span></small></li>`).join('')}</ul>` : '<p class="hint">Новых форм для заучивания в этой главе нет: остальные формы образуются по правилам.</p>'}
-      <a class="btn" href="#/parts">${ICON.cards}Основные формы</a></section>` : '';
+      ${fs.length ? `<a class="btn primary" href="#/parts?ch=${c.n}">${ICON.cards}Формы этой главы</a>` : `<a class="btn" href="#/parts?m=table">${ICON.table}Таблица основных форм</a>`}</section>` : '';
   return `${subHead('#/course', 'Курс', `Глава ${c.n}. ${esc(c.t)}`, `${tbText(k)} · ${wbText(k)}`)}
     <div class="cols"><div class="col">${status}${learn}${words}${forms}</div>
     <div class="col">${ws.length ? `<section class="card flat">${wordTable(ws)}</section>` : ''}</div></div>`;
@@ -1104,7 +1104,10 @@ function wqFinish(){
 /* ---------- Основные формы глаголов: карточки полужирных форм, тест «Какая это форма?», таблица ---------- */
 // Карточка = одна полужирная форма открытого времени (её автор велит заучить, с. 412–413). Остальные формы видны на обороте
 // и в таблице как «по правилу». Порядок повторения тот же, что у слов; прогресс в form_progress
-const PS = {set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false, mode: 'cards', focus: 0, all: false};
+// ch: карточки форм одной главы (кнопка на экране главы, правки 2.2), в том числе главы впереди
+const PS = {set: 'srs', deck: [], idx: 0, known: 0, failed: new Set(), task: null, rendered: false, mode: 'cards', focus: 0, all: false, ch: 0};
+// Что показывать на обороте: открытые формы, а в карточках главы впереди ещё и формы до этой главы
+const fSeen = f => f.ch <= Math.max(curCh(), PS.ch || 0);
 const PQ = {list: [], i: 0, score: 0, miss: []};
 const FORMS_F = ['форма', 'формы', 'форм'];
 const PP_SHORT_EX = {'35:2': 'имперф.', '64:2': 'плюсквамперф.'};
@@ -1119,8 +1122,12 @@ function rootOf(v){
 const hasCards = () => openBold().length > 0 || BOLD.some(f => fRec(f.n));
 const quizReady = () => FORMS.some(f => f.i > 0 && isOpen(f));
 function pCardsHTML(task){
-  return `${task ? '' : `<div class="row between">${seg('pset', [['srs','Повторение'],['all','Все'],['hard','Трудные']], PS.set, 'Набор')}<button type="button" class="btn sm" id="pShuffle">Перемешать</button></div>`}
-    <div class="pbar thin"><i id="pBar"></i></div>
+  if(PS.ch) return `<p class="hint">${chStatus(PS.ch) === 'ahead' ? `Глава ${PS.ch} впереди (сейчас глава ${curCh()}). Потренироваться можно уже сейчас: отмеченные формы придут в повторение по сроку, а новые формы этой главы попадут в план, когда глава станет текущей.` : `Формы для заучивания, которые открывает глава ${PS.ch}.`}</p>
+    <div class="row between"><span class="meta">Глава ${PS.ch}: ${formsOfChapter(PS.ch).length} ${plural(formsOfChapter(PS.ch).length, FORMS_F)}</span><button type="button" class="btn sm" id="pShuffle">Перемешать</button></div>${pCardsCore(task)}`;
+  return `${task ? '' : `<div class="row between">${seg('pset', [['srs','Повторение'],['all','Все'],['hard','Трудные']], PS.set, 'Набор')}<button type="button" class="btn sm" id="pShuffle">Перемешать</button></div>`}${pCardsCore(task)}`;
+}
+function pCardsCore(task){
+  return `<div class="pbar thin"><i id="pBar"></i></div>
     <div class="row between"><span class="meta" id="pMeta"></span></div>
     <div id="pArea">
       <div class="stage"><div class="fcard" id="pCard" tabindex="0" role="button" aria-label="Перевернуть карточку"><div class="face front" id="pFront"></div><div class="face back pback" id="pBack"></div></div></div>
@@ -1133,6 +1140,13 @@ const notYet = text => `<div class="done-box"><span class="done-ic">${ICON.done}
 function vParts(r){
   PS.mode = ['quiz', 'table'].includes(r.q.get('m')) ? r.q.get('m') : 'cards';
   PS.focus = +r.q.get('v') || 0;
+  // #/parts?ch=N: карточки форм главы N (с экрана главы), можно и для главы впереди
+  const pch = +r.q.get('ch') || 0;
+  PS.ch = chapter(pch) && formsOfChapter(pch).length ? pch : 0;
+  if(PS.ch){ PS.mode = 'cards'; PS.focus = 0;
+    return `${subHead('#/ch/' + PS.ch, 'Глава ' + PS.ch, 'Основные формы главы ' + PS.ch, 'Карточки полужирных форм из таблицы книги, с. 412–421')}
+    <div class="trainer" id="p-trainer"><section id="p-cards">${pCardsHTML(false)}</section>
+    <p class="hint center"><a href="#/parts">Все основные формы</a></p></div>`; }
   // открыт из статьи слова: если у глагола нет открытых форм для заучивания, показываем его строку в таблице
   const fv = VERB.get(PS.focus);
   if(fv && PS.mode === 'cards' && !openBold().some(f => f.v === fv)){ PS.mode = 'table'; if(!vForms(fv).every(isOpen)) PS.all = true; }
@@ -1141,7 +1155,7 @@ function vParts(r){
     <div class="trainer${PS.mode === 'table' ? ' wide' : ''}" id="p-trainer">
       ${seg('pmode', [['cards','Карточки'],['quiz','Тест'],['table','Таблица']], PS.mode, 'Режим')}
       <section id="p-cards"${PS.mode === 'cards' ? '' : ' hidden'}>${hasCards() ? pCardsHTML(false)
-        : notYet('Карточки появятся в главе 19: там учебник вводит будущее время и первые формы для заучивания (<span class="gr">ἔσομαι</span>, <span class="gr">ἕξω</span>). Карточка спрашивает одну форму, которую книга выделяет полужирным.')}</section>
+        : notYet(`Сейчас вы на главе ${curCh()}. Формы для заучивания начнут открываться с главы 19: там учебник вводит будущее время и первые такие формы (<span class="gr">ἔσομαι</span>, <span class="gr">ἕξω</span>). Карточка спрашивает одну форму, которую книга выделяет полужирным. Формы любой главы можно потренировать с экрана этой главы.`)}</section>
       <section id="p-quiz"${PS.mode === 'quiz' ? '' : ' hidden'}>${quizReady() ? `
         <div class="pbar thin"><i id="pqBar"></i></div>
         <div class="row between"><span class="meta" id="pqMeta"></span><span class="meta" id="pqScore"></span></div>
@@ -1149,7 +1163,7 @@ function vParts(r){
           <div class="opts one" id="pqOpts"></div><div class="feedback" id="pqFb"></div>
           <button type="button" class="btn primary wide" id="pqNext" hidden>Дальше</button></div>
         <div class="done-box" id="pqDone" hidden><div class="pct" id="pqPct"></div><p id="pqSum"></p><p class="meta" id="pqMiss"></p><button type="button" class="btn primary" id="pqRestart">Ещё раз</button></div>`
-        : notYet('Тест откроется в главе 19, когда кроме настоящего времени появится будущее. В тесте только открытые формы глаголов пройденных глав.')}
+        : notYet(`Сейчас вы на главе ${curCh()}. Тест откроется в главе 19, когда кроме настоящего времени появится будущее. В тесте только открытые формы глаголов пройденных глав.`)}
       </section>
       <section id="p-table"${PS.mode === 'table' ? '' : ' hidden'}>${partsTableHTML()}</section>
     </div>`;
@@ -1165,6 +1179,7 @@ function partsTableHTML(){
       return `<td class="gr${f && f.bold ? ' bold' : ''}${!f ? ' none' : !isOpen(f) ? ' off' : ''}"${f && PP_NAME[v.n + ':' + i] ? ` title="${esc(PP_NAME[v.n + ':' + i])}"` : ''}>${f && f.bold && isOpen(f) ? `<span class="dot ${DOT[fState(f.n)]}"></span>` : ''}${esc(g)}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 function initParts(){
+  if(PS.ch){ startPCards(null); return; }
   $$('[data-pmode]').forEach(b => b.onclick = () => { PS.mode = b.dataset.pmode; pressed($$('[data-pmode]'), b);
     ['cards', 'quiz', 'table'].forEach(m => { $('#p-' + m).hidden = m !== PS.mode; });
     $('#p-trainer').classList.toggle('wide', PS.mode === 'table');
@@ -1194,6 +1209,8 @@ function buildPDeck(){
   if(PS.task){
     const d = taskDeck(PS.task), fresh = d.filter(f => !fRec(f.n));
     PS.deck = shuffle(d.filter(f => fRec(f.n))).concat(fresh);
+  } else if(PS.ch){
+    PS.deck = shuffle(formsOfChapter(PS.ch));
   } else {
     const open = openBold();
     if(PS.set === 'hard' && !BOLD.some(isFHard)){ PS.set = 'all'; pressed($$('[data-pset]'), $('[data-pset=all]')); }
@@ -1217,8 +1234,8 @@ function pFront(f){
 }
 // Оборот: ответ крупно, ниже строка глагола только с открытыми формами, сноски свёрнуты в «Пояснения»
 function pBack(f){
-  const v = f.v, open = vForms(v).filter(isOpen);
-  const notes = Object.entries(v.fn || {}).filter(([i]) => { const g = FORM.get(v.n * 10 + +i); return g && isOpen(g); });
+  const v = f.v, open = vForms(v).filter(fSeen);
+  const notes = Object.entries(v.fn || {}).filter(([i]) => { const g = FORM.get(v.n * 10 + +i); return g && fSeen(g); });
   return `<div class="fb-q">${esc(formName(f))}</div><div class="fb-ans gr">${esc(f.g)}</div>
     <div class="fb-line">${open.map(g => `<span class="fl${g.bold ? ' bold' : ''}${g === f ? ' cur' : ''}"><small>${formShort(g)}</small><span class="gr">${esc(g.g)}</span><em>${g.bold ? 'заучить' : 'по правилу'}</em></span>`).join('')}</div>
     ${notes.length ? `<details class="fb-notes"><summary>Пояснения <span class="muted">· ${notes.length}</span>${ICON.chev}</summary><ul class="pp-notes">${notes.map(([i, t]) => `<li><b>${formShort(FORM.get(v.n * 10 + +i))}</b> <span class="gr">${esc(formOf(v, +i))}</span>: ${esc(t)}</li>`).join('')}</ul></details>` : ''}
@@ -1255,7 +1272,16 @@ function pFinish(){
     box.innerHTML = taskDoneHTML(PS.deck.length ? `Задание выполнено: ${PS.size} ${plural(PS.size, FORMS_F)}. Завтра к повторению: <b>${tomorrow}</b>.` : 'Эти формы уже пройдены.');
     return;
   }
+  if(PS.ch){
+    box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>Круг пройден. Отмечено «знаю»: <b>${PS.known}</b> из <b>${PS.size}</b>.</p>
+      <div class="row center"><button type="button" class="btn primary" id="pRestart">Начать заново</button><a class="btn" href="#/ch/${PS.ch}">К главе ${PS.ch}</a></div>`;
+    $('#pRestart').onclick = buildPDeck; return;
+  }
   const fresh = openBold().filter(f => !fRec(f.n)).length;
+  if(!openBold().length && !PS.deck.length){
+    box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>Сейчас вы на главе ${curCh()}. Формы для заучивания начнут открываться с главы 19.${BOLD.some(f => fRec(f.n)) ? ' Формы, которые вы уже тренировали с экрана главы, придут сюда в повторение по сроку.' : ''}</p><a class="btn" href="#/ch/${Math.min(curCh(), 36)}">Текущая глава</a>`;
+    pStats(); return;
+  }
   box.innerHTML = `<span class="done-ic">${ICON.done}</span><p>${PS.set === 'srs'
     ? `${PS.deck.length ? 'Сессия завершена.' : 'На сегодня всё повторено.'} Завтра к повторению: <b>${tomorrow}</b>.${fresh ? ` Новых форм: ${fresh}.` : ''}`
     : `Круг пройден. Отмечено «знаю»: <b>${PS.known}</b> из <b>${PS.size}</b>.`}</p>
