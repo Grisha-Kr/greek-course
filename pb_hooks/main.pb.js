@@ -34,9 +34,13 @@ onRecordCreateRequest((e) => {
       throw new BadRequestError("Срок действия приглашения истёк.");
     }
     e.record.set("role", "user");
+    // срок доступа задаёт приглашение, а не сам пользователь (правки 3.1)
+    e.record.set("access_until", require(`${__hooks}/access_lib.js`).untilFor(invite.getString("access_period")));
   } else {
     e.record.set("role", "admin");
+    e.record.set("access_until", "");
   }
+  e.record.set("suspended", false);
   if (!e.record.getString("theme")) e.record.set("theme", "auto");
   // курс начинается с главы 1 (правки 2.1)
   const ch = e.record.getInt("chapter");

@@ -604,3 +604,37 @@ kbd{font-family:var(--f-body);font-size:11.5px;border:1px solid var(--card-line)
 .kb-toggle[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 #d-kbox .kb{margin-top:2px}
 .ptab th{text-transform:none;letter-spacing:0}
+
+/* ---------- Срок доступа и раздел «Пользователи» (правки 3.1) ---------- */
+.access-bar{margin-bottom:12px}
+.access-bar > div{display:flex;align-items:flex-start;gap:6px;background:var(--soft);border-radius:12px;padding:10px 4px 10px 14px}
+.access-bar.off > div{background:color-mix(in srgb,var(--bad) 10%,var(--card));border:1px solid color-mix(in srgb,var(--bad) 35%,var(--card-line))}
+.access-bar p{flex:1;min-width:0;font-size:14px;line-height:1.5;padding-top:2px;overflow-wrap:anywhere}
+.access-bar a{color:inherit;font-weight:700}
+.access-bar .icon-btn{width:36px;height:36px;font-size:22px;color:inherit;margin-top:-6px}
+.acc-line{font-size:14.5px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
+.acc-line.off{color:var(--bad)}
+.acc-card{border-color:color-mix(in srgb,var(--bad) 35%,var(--card-line))}
+.acc-card .hint{overflow-wrap:anywhere}
+.ch-row.static{cursor:default}
+.ch-row.static:hover{background:none}
+.ch-row.static.current:hover{background:var(--soft)}
+.tag{display:inline-flex;align-items:center;border-radius:999px;padding:1px 9px;font-size:12px;font-weight:700;background:var(--soft);color:var(--muted);white-space:normal}
+.tag.ok{background:color-mix(in srgb,var(--good) 15%,var(--card));color:var(--good)}
+.tag.warn{background:color-mix(in srgb,var(--learn) 28%,var(--card));color:var(--ink)}
+.tag.bad{background:color-mix(in srgb,var(--bad) 14%,var(--card));color:var(--bad)}
+.users{display:flex;flex-direction:column}
+.usr{display:flex;flex-direction:column;gap:10px;padding:14px 0;border-top:1px solid var(--line)}
+.usr:first-child{border-top:0;padding-top:4px}
+.usr-head{display:flex;gap:12px;align-items:flex-start}
+.uface{width:40px;height:40px;flex:none;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-weight:700;font-size:16px;overflow:hidden}
+.uface img{width:100%;height:100%;object-fit:cover;display:block}
+.usr-main{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0}
+.usr-main b{overflow-wrap:anywhere}
+.usr-main .muted{font-size:13px;overflow-wrap:anywhere}
+.usr-acts,.usr-btns{display:flex;gap:6px;flex-wrap:wrap}
+.usr-more > summary{cursor:pointer;color:var(--accent);font-size:14px;font-weight:600;min-height:44px;display:flex;align-items:center}
+.usr-more[open]{display:flex;flex-direction:column;gap:12px}
+.usr-row{display:flex;flex-direction:column;gap:8px}
+.usr-log{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.usr-log .d{font-weight:700}

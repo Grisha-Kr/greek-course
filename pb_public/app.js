@@ -78,7 +78,7 @@ const ICON = {
 };
 
 /* ---------- Состояние ---------- */
-const S = {words:[], letters:[], plans:[], forms:[], added:[], drills:[], invites:[], loaded:false};
+const S = {words:[], letters:[], plans:[], forms:[], added:[], drills:[], invites:[], loaded:false, access:null, adminUsers:null};
 const WP = new Map(), LP = new Map(), FP = new Map(), AD = new Map(), DP = new Map(); // прогресс по номеру слова, буквы и формы; добавленные слова; таблицы и правила по ключу
 const loadLS = (k, d) => { try { const v = localStorage.getItem('gk_'+k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } };
 const saveLS = (k, v) => { try { localStorage.setItem('gk_'+k, JSON.stringify(v)); } catch(e){} };
@@ -206,8 +206,71 @@ async function pushChapter(){
     if(CHP === n){ CHP = 0; saveLS(chKey(), null); }
     schedule();
   } catch(e){
-    if(e && e.status){ CHP = 0; saveLS(chKey(), null); toast('Не удалось сохранить главу: ' + errText(e)); render(true); }
+    if(e && e.status){ CHP = 0; saveLS(chKey(), null); toast('Не удалось сохранить главу: ' + errText(e)); render(true); if(e.status === 403) loadAccess(); }
   }
+}
+
+/* ---------- Срок доступа (правки 3.1) ---------- */
+// Состояние приходит с сервера (/api/greek/access, «сегодня» он считает по времени Хабаровска).
+// Пока ответа нет (запуск без интернета), срок берётся из записи профиля на устройстве (access_until, suspended).
+// Без доступа видны только «Сегодня» без плана, список глав, «Прогресс» и профиль; остальные экраны закрыты (render).
+// Полоску вверху можно закрыть до следующего входа (gk_accHide сбрасывается при входе и выходе).
+function acc(){
+  const u = me(), a = S.access && S.access.uid === u.id ? S.access : null;
+  const t = a && a.today > todayISO() ? a.today : todayISO();
+  const admin = a ? a.admin : u.role === 'admin';
+  const until = a ? a.until || '' : u.access_until || '';
+  const suspended = a ? !!a.suspended : !!u.suspended;
+  const reason = admin ? '' : suspended ? 'suspended' : until && until < t ? 'expired' : '';
+  return {admin, until, suspended, reason, active: !reason, today: t, contact: (a && a.contact) || loadLS('contact', '')};
+}
+const closed = () => pb.authStore.isValid && !acc().active;
+const OPEN_CLOSED = new Set(['home', 'course', 'dict', 'progress', 'profile']); // экраны, открытые без доступа
+const contactHTML = c => /^[^\s@]+@[^\s@]+$/.test(c || '') ? `<a href="mailto:${esc(c)}">${esc(c)}</a>` : esc(c || 'администратору');
+const dnum = iso => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d) / 864e5; };
+const leftText = k => k <= 0 ? 'сегодня последний день' : `осталось ${k} ${plural(k, DAYS_F)}`;
+const accWhy = a => a.reason === 'expired' ? ` (срок закончился ${fmtDay(a.until)})` : '';
+const ACC_REST = 'Ваш прогресс сохранён и виден, занятия, главы и словарь откроются после продления.';
+const accMsg = () => `Доступ приостановлен: виден ваш прогресс, а заниматься и открывать главы и словарь нельзя. Чтобы продлить доступ, напишите: ${acc().contact || 'администратору'}.`;
+async function loadAccess(){
+  if(!pb.authStore.isValid) return;
+  const was = closed();
+  try {
+    const a = await pb.send('/api/greek/access', {});
+    S.access = {...a, uid: me().id};
+    if(a.contact) saveLS('contact', a.contact);
+  } catch(e){ return; }
+  accessChanged(was);
+}
+// Доступ закрылся: открытые окна закрываются, закрытый экран сменяется «Сегодня»; открылся: всё как обычно
+function accessChanged(was){
+  renderAccessBar();
+  if(was === closed()) return;
+  if(closed()){
+    if(wcDlg.open) wcDlg.close();
+    if(dlg.open) dlg.close();
+    if(cropDlg.open) cropFinish(null);
+  }
+  if(S.loaded) render(true);
+}
+const accKey = a => [me().id, a.reason, a.until].join('|');
+function renderAccessBar(force){
+  const a = acc(), bar = $('#access-bar');
+  let html = '';
+  if(!pb.authStore.isValid) html = '';
+  else if(!a.active) html = `<b>Доступ приостановлен${accWhy(a)}.</b> ${ACC_REST} Чтобы продлить, напишите: ${contactHTML(a.contact)}`;
+  else if(a.until && !a.admin && dnum(a.until) - dnum(a.today) <= 7) html = `Доступ действует до ${fmtDay(a.until)} (${leftText(Math.round(dnum(a.until) - dnum(a.today)))}). Чтобы продлить, напишите: ${contactHTML(a.contact)}`;
+  bar.classList.toggle('off', !a.active);
+  $('#access-text').innerHTML = html;
+  if(force && html) saveLS('accHide', '');
+  bar.hidden = !html || loadLS('accHide', '') === accKey(a);
+}
+$('#access-close').addEventListener('click', () => { saveLS('accHide', accKey(acc())); $('#access-bar').hidden = true; });
+function accessLine(){
+  const a = acc();
+  if(a.admin) return 'Вы администратор, доступ бессрочный.';
+  if(!a.active) return `Доступ приостановлен${accWhy(a)}. ${ACC_REST} Чтобы продлить, напишите: ${contactHTML(a.contact)}`;
+  return a.until ? `Доступ действует до ${fmtDay(a.until)} включительно.` : 'Доступ бессрочный.';
 }
 
 /* ---------- Сохранение: сразу на экране, на сервер через очередь (работает и без интернета) ---------- */
@@ -225,6 +288,7 @@ function upsertLocal(key, rec){
 }
 // Изменить запись пользователя (слово n, буква n, план на дату): локально сразу, на сервер по очереди
 function saveRec(key, val, patch){
+  if(closed()){ toast(accMsg()); return null; } // без доступа заниматься нельзя: ничего не сохраняем и не копим в очереди
   const old = findLocal(key, val);
   // _local: запись создана на устройстве и ещё не дошла до сервера
   const rec = old ? {...old, ...patch} : {id: newId(), user: me().id, [MATCH[key]]: val, created: new Date().toISOString(), _local: true, ...patch};
@@ -239,6 +303,7 @@ let flushing = false, flushAgain = false;
 async function flush(){
   if(flushing){ flushAgain = true; return; }
   flushing = true;
+  let denied = false;
   try {
     for(const qk of Object.keys(Q)){
       const q = Q[qk], rec = PBN[q.key] && findLocal(q.key, q.val);
@@ -271,12 +336,16 @@ async function flush(){
         saveLS(qKey(), Q);
       } catch(e){
         if(!e || !e.status){ flushAgain = false; break; } // нет связи: попробуем позже
+        // ошибка сервера (в том числе доступ закрыт): запись не копится в очереди, показываем ошибку
         delete Q[qk]; saveLS(qKey(), Q);
+        if(e.status === 403) denied = true;
         toast('Не удалось сохранить: ' + errText(e));
       }
     }
   } finally {
     flushing = false;
+    // доступ закрыт: перечитываем его и прогресс с сервера, чтобы на экране не осталось несохранённого
+    if(denied){ loadAccess(); loadAll().catch(() => {}); }
     if(flushAgain){ flushAgain = false; flush(); }
   }
 }
@@ -312,7 +381,7 @@ async function loadAll(){
 let subscribed = false;
 async function subscribeAll(){
   if(subscribed) return; subscribed = true;
-  await pb.collection('users').subscribe(me().id, e => { if(e.action === 'update'){ pb.authStore.save(pb.authStore.token, e.record); themeFromUser(); schedule(); } });
+  await pb.collection('users').subscribe(me().id, e => { if(e.action === 'update'){ const was = closed(); pb.authStore.save(pb.authStore.token, e.record); themeFromUser(); accessChanged(was); schedule(); loadAccess(); } });
   for(const k of KEYS){
     await pb.collection(PBN[k]).subscribe('*', e => {
       const val = e.record[MATCH[k]];
@@ -405,7 +474,7 @@ function fitPlan(tasks, add, fresh){
 }
 // Составить план на сегодня, если его ещё нет; согласовать с текущей главой; отметить задания, которые уже нечего делать
 function checkPlan(){
-  if(!UI.ready || !pb.authStore.isValid || !chKnown()) return;
+  if(!UI.ready || !pb.authStore.isValid || !chKnown() || closed()) return; // без доступа план не составляется
   const p = todayPlan();
   if(!p){ const tasks = buildPlan(); saveRec('plans', today(), {tasks, done: tasks.length === 0}); return; }
   // план, составленный до этапа 3а: задание «Таблицы и правила» добавляется один раз за день (отметка на устройстве)
@@ -503,9 +572,10 @@ async function startApp(){
   UI.day = today();
   // сначала то, что сохранено на устройстве: приложение открывается и без интернета
   if(loadCache()) S.loaded = true;
+  renderAccessBar();
   render(true);
   try {
-    await loadAll();
+    await Promise.all([loadAll(), loadAccess()]);
     S.loaded = true; UI.ready = true; $('#notice').hidden = true; render(true);
     if(route().name === 'profile') loadProfileExtras();
     flush(); pushChapter();
@@ -521,15 +591,16 @@ async function startApp(){
 function checkDay(){
   if(!S.loaded || UI.day === today()) return;
   UI.day = today();
+  renderAccessBar(); loadAccess();
   if(['home', 'task'].includes(route().name)) render(true); else schedule();
 }
 setInterval(checkDay, 30e3);
 document.addEventListener('visibilitychange', () => {
   if(document.visibilityState !== 'visible') return;
   checkUpdate(); checkDay();
-  if(S.loaded && pb.authStore.isValid){ flush(); pushChapter(); loadAll().catch(() => {}); }
+  if(S.loaded && pb.authStore.isValid){ loadAccess(); flush(); pushChapter(); loadAll().catch(() => {}); }
 });
-window.addEventListener('online', () => { $('#notice').hidden = true; if(S.loaded){ flush(); pushChapter(); loadAll().catch(() => {}); } });
+window.addEventListener('online', () => { $('#notice').hidden = true; if(S.loaded){ loadAccess(); flush(); pushChapter(); loadAll().catch(() => {}); } });
 window.addEventListener('offline', () => showNotice('Нет подключения к интернету. Прогресс сохранится на устройстве и отправится, когда связь вернётся.'));
 
 /* ---------- Проверка новой версии ---------- */
@@ -581,6 +652,8 @@ let raf = 0;
 function schedule(){ if(raf) return; raf = requestAnimationFrame(() => { raf = 0; render(); }); }
 function render(force){
   const r = route();
+  // без доступа закрытый экран (адрес, кнопка «Назад», старая ссылка, ярлык) сменяется «Сегодня» с полоской о доступе
+  if(VIEWS[r.name] && !OPEN_CLOSED.has(r.name) && closed()){ renderAccessBar(true); location.replace('#/'); return; }
   $$('.tab').forEach(t => t.setAttribute('aria-current', t.dataset.tab === TAB[r.name] ? 'page' : 'false'));
   const m = $('#main');
   if(!S.loaded){ m.innerHTML = '<div class="loading">Загружаю…</div>'; return; }
@@ -603,6 +676,7 @@ const bar = (part, total, cls) => `<div class="pbar${cls ? ' ' + cls : ''}"><i s
 
 /* ---------- Сегодня ---------- */
 function vHome(){
+  if(closed()) return `${head('Сегодня', longDate())}<div class="cols"><div class="col">${chapterStatic()}${accessCard()}</div><div class="col">${weekCard()}</div></div>`;
   const p = todayPlan(), tasks = p ? (p.tasks || []).slice().sort((a, b) => TASK_ORDER.indexOf(a.key) - TASK_ORDER.indexOf(b.key)) : [];
   const done = tasks.filter(t => t.done).length, cur = tasks.find(t => !t.done);
   const left = tasks.filter(t => !t.done).reduce((a, t) => a + taskInfo(t).min, 0);
@@ -666,6 +740,23 @@ function courseMeters(){
     <div class="meter"><div class="meter-t"><span>Текст Нового Завета</span><b>${pctNT()}</b></div>${bar(coverage(), NT_WORDS, 'good')}</div>
   </section>`;
 }
+// Без доступа: глава без ссылки, «Заучить» и кнопки, только полосы курса и слов минимума
+function chapterStatic(){
+  const n = curCh(), passed = passedCount(), learned = MINW.filter(w => isLearned(w.n)).length;
+  return `<section class="card chap-now">
+    <span class="kicker">${n > 36 ? 'Курс' : 'Текущая глава'}</span>
+    ${n > 36 ? '<h2>Учебник пройден</h2>' : `<div class="chap-link"><h2>Глава ${n}</h2><span>${esc(chapter(n).t)}</span></div>`}
+    <div class="meter"><div class="meter-t"><span>Курс</span><b>${passed} ${plural(passed, CH_F)} из ${CHAPTERS.length}</b></div>${bar(passed, CHAPTERS.length)}</div>
+    <div class="meter"><div class="meter-t"><span>Слова минимума</span><b>${learned} из ${MINW.length}</b></div>${bar(learned, MINW.length, 'good')}</div>
+  </section>`;
+}
+// Карточка вместо плана на день, когда доступа нет
+function accessCard(){
+  const a = acc();
+  return `<section class="card acc-card"><h2>Доступ приостановлен</h2>
+    <p class="lead">${a.reason === 'expired' ? `Срок доступа закончился ${fmtDay(a.until)}. ` : ''}${ACC_REST}</p>
+    <p class="hint">Чтобы продлить, напишите: ${contactHTML(a.contact)}</p></section>`;
+}
 // «Глава пройдена»: окно подтверждения; незаконченное никуда не пропадает
 function passChapter(){
   const n = curCh(); if(n > 36) return;
@@ -714,17 +805,28 @@ function chapterRow(c){
   let sub = `с. ${courseOf(c.n).tb[0]}`;
   if(c.n === 3) sub += ` · знаю ${lettersKnown()} из ${LETTERS.length} букв`;
   else if(ws.length) sub += ` · ${ws.length} ${plural(ws.length, WORDS_F)}, выучено ${ws.filter(w => isLearned(w.n)).length}`;
-  return `<a class="ch-row ${st}" href="#/ch/${c.n}"><span class="num">${c.n}</span>
-    <span class="tt"><b>${esc(c.t)}</b><small>${sub}</small></span><span class="st ${st}">${st === 'passed' ? ICON.check : ''}${ST_TEXT[st]}</span></a>`;
+  // без доступа глава не открывается: строка без ссылки
+  const tag = closed() ? 'div' : 'a';
+  return `<${tag} class="ch-row ${st}${closed() ? ' static' : ''}"${closed() ? '' : ` href="#/ch/${c.n}"`}><span class="num">${c.n}</span>
+    <span class="tt"><b>${esc(c.t)}</b><small>${sub}</small></span><span class="st ${st}">${st === 'passed' ? ICON.check : ''}${ST_TEXT[st]}</span></${tag}>`;
 }
 function vCourse(){
   const passed = passedCount(), n = curCh();
   return `${head('Курс', `Маунс, «Основы библейского греческого языка» · ${n > 36 ? 'учебник пройден' : `текущая глава ${n}, пройдено ${passed} из ${CHAPTERS.length}`}`)}
     <div class="parts">${PARTS.map(p => `<section class="card part"><h2><span>Часть ${p.n}</span>${esc(p.t)}</h2>
       <div class="ch-list">${CHAPTERS.filter(c => c.n >= p.from && c.n <= p.to).map(chapterRow).join('')}</div></section>`).join('')}</div>
-    ${drillsCard()}
+    ${closed() ? `${sectionsLine()}<p class="hint">Доступ приостановлен: главы, алфавит, основные формы, таблицы и правила откроются после продления. Прогресс сохранён.</p>` : `${drillsCard()}
     ${partsCard()}
-    <p class="hint">Главы открываются по порядку: следующая становится текущей, когда вы нажимаете «Глава пройдена». Чтобы вернуться к пройденной главе, откройте её и нажмите «Сделать текущей». Главы впереди можно смотреть и учить их слова карточками, в план на день они придут в свой черёд.</p>`;
+    <p class="hint">Главы открываются по порядку: следующая становится текущей, когда вы нажимаете «Глава пройдена». Чтобы вернуться к пройденной главе, откройте её и нажмите «Сделать текущей». Главы впереди можно смотреть и учить их слова карточками, в план на день они придут в свой черёд.</p>`}`;
+}
+// Без доступа: алфавит, основные формы, таблицы и правила одной строкой прогресса, без кнопок
+function sectionsLine(){
+  const open = openBold(), fst = open.filter(f => fRec(f.n)).length, fsure = open.filter(f => fState(f.n) === 'sure').length;
+  const dop = dOpenItems(), dst = dop.filter(d => dRec(d.k)).length, dsure = dop.filter(d => dState(d.k) === 'sure').length;
+  const rows = [['Алфавит', `начато ${LP.size} из ${LETTERS.length}, знаю ${lettersKnown()}`],
+    ['Основные формы', open.length ? `начато ${fst} из ${open.length}, уверенно ${fsure}` : 'откроются с главы 19'],
+    ['Таблицы и правила', dop.length ? `начато ${dst} из ${dop.length}, уверенно ${dsure}` : 'откроются с главы 3']];
+  return `<section class="card"><h2>Разделы</h2><ul class="legend">${rows.map(([t, v]) => `<li><span class="tt"><b>${t}</b><small>${v}</small></span></li>`).join('')}</ul></section>`;
 }
 // Полужирные формы, которые открываются в главе n
 const formsOfChapter = n => BOLD.filter(f => f.ch === n);
@@ -1161,6 +1263,7 @@ function wordTable(list, art){
 }
 const DICT_UI = () => ({mode: loadLS('dict_mode', 'min') === 'all' ? 'all' : 'min', q: loadLS('dict_q', ''), ch: loadLS('dict_ch', 'all'), f: loadLS('dict_f', 'all'), k: loadLS('dict_k', 'all')});
 function vDict(){
+  if(closed()) return `${head('Словарь', 'Словарь учебника и лексический минимум')}<section class="card"><p class="lead">Словарь откроется после продления доступа.</p><p class="hint">Чтобы продлить, напишите: ${contactHTML(acc().contact)}</p></section>`;
   const u = DICT_UI(), all = u.mode === 'all';
   const opt = (v, l, cur) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${l}</option>`;
   const n = all ? fullList().length : MINW.length;
@@ -1203,6 +1306,7 @@ function dictFilter(u){
     && (!q || norm(w.g).includes(q) || norm(w.ru).includes(q) || (w.d && (norm(w.d.g).includes(q) || norm(w.d.ru).includes(q)))));
 }
 function initDict(){
+  if(closed()) return;
   let timer = 0;
   const upd = () => {
     if(!$('#d-q')) return; // экран словаря уже закрыт
@@ -1285,6 +1389,7 @@ function wordCardHTML(w){
 const wcDlg = $('#wcard');
 let wcGo = '';  // адрес, куда перейти после закрытия карточки (после шага «назад» в истории)
 function openWord(n){
+  if(closed()){ toast(accMsg()); return; }
   const w = WORD.get(n); if(!w) return;
   wcDlg.dataset.n = n;
   wcDlg.innerHTML = wordCardHTML(w);
@@ -1907,18 +2012,27 @@ function stackCard(title, total, c, sub){
 function drillsProgress(){
   const open = dOpenItems(), st = open.filter(d => dRec(d.k)).length, sure = open.filter(d => dState(d.k) === 'sure').length;
   return `<section class="card"><div class="plan-top"><h2>Таблицы и правила</h2><span class="muted">${open.length ? `начато ${st} из ${open.length}` : 'с главы 3'}</span></div>${bar(st, open.length || 1, 'good')}
-    <p class="hint">Таблицы и правила: начато ${st} из ${open.length}, уверенно ${sure}. Уверенно: интервал повторения от двух недель.</p><a class="btn" href="#/drills">Открыть</a></section>`;
+    <p class="hint">Таблицы и правила: начато ${st} из ${open.length}, уверенно ${sure}. Уверенно: интервал повторения от двух недель.</p>${closed() ? '' : '<a class="btn" href="#/drills">Открыть</a>'}</section>`;
+}
+// «План выполнен»: неделя с понедельника и дни подряд, нажатие открывает календарь занятий (открыт и без доступа)
+function weekCard(){
+  const st = streak(), week = Array.from({length: 7}, (_, i) => addDays(weekStart(), i)), plans = planMap(), t = today();
+  return `<section class="card week-card" data-act="calendar" role="button" tabindex="0" aria-label="План выполнен: ${st} ${plural(st, DAYS_F)} подряд. Открыть календарь занятий">
+        <div class="plan-top"><h2>План выполнен</h2><span class="muted">${st} ${plural(st, DAYS_F)} подряд</span></div>
+        <div class="days" aria-hidden="true">${week.map((d, i) => { const dd = +d.slice(8), s = dayState(plans.get(d));
+          return `<span class="${s}${d === t ? ' today' : ''}${d > t ? ' future' : ''}"><small>${WDM[i]}</small><i>${s === 'full' ? ICON.check : dd}</i></span>`; }).join('')}</div>
+        <span class="week-more">${ICON.cal}Календарь занятий${ICON.chev}</span>
+      </section>`;
 }
 function vProgress(){
-  const kn = lettersKnown(), st = streak(), cov = coverage(), learned = LEX.filter(w => isLearned(w.n)).length;
-  const week = Array.from({length: 7}, (_, i) => addDays(weekStart(), i)), plans = planMap(), t = today();
+  const kn = lettersKnown(), cov = coverage(), learned = LEX.filter(w => isLearned(w.n)).length;
   const all = {sure:0, learn:0, hard:0, new:0}; LEX.forEach(w => all[wState(w.n)]++);
   const open = openBold(), pc = {sure:0, learn:0, hard:0, new:0}; open.forEach(f => pc[fState(f.n)]++);
   const passed = passedCount(), cn = curCh();
   return `${head('Прогресс', 'Курс, слова, таблицы и правила, основные формы, алфавит и дни занятий')}
     <div class="cols"><div class="col">
       <section class="card"><div class="plan-top"><h2>Курс</h2><span class="muted">${passed} ${plural(passed, CH_F)} из ${CHAPTERS.length}</span></div>${bar(passed, CHAPTERS.length)}
-        <p class="hint">${cn > 36 ? 'Учебник пройден.' : `Текущая глава ${cn}: ${esc(chapter(cn).t)}.`}</p><a class="btn" href="${cn > 36 ? '#/course' : '#/ch/' + cn}">${cn > 36 ? 'Открыть курс' : 'Открыть главу'}</a></section>
+        <p class="hint">${cn > 36 ? 'Учебник пройден.' : `Текущая глава ${cn}: ${esc(chapter(cn).t)}.`}</p>${closed() ? '' : `<a class="btn" href="${cn > 36 ? '#/course' : '#/ch/' + cn}">${cn > 36 ? 'Открыть курс' : 'Открыть главу'}</a>`}</section>
       <section class="card nt-card"><h2>Текст Нового Завета</h2>
         <p class="nt-line">Вы знаете слова, которые составляют <b>${pctNT()}</b> текста Нового Завета.</p>
         ${bar(cov, NT_WORDS, 'good')}
@@ -1926,17 +2040,12 @@ function vProgress(){
       ${stackCard('Слова минимума', MINW.length, wordCounts(), plural(MINW.length, WORDS_F))}
       ${stackCard('Весь словарь', LEX.length, all, plural(LEX.length, WORDS_F))}
     </div><div class="col">
-      <section class="card week-card" data-act="calendar" role="button" tabindex="0" aria-label="План выполнен: ${st} ${plural(st, DAYS_F)} подряд. Открыть календарь занятий">
-        <div class="plan-top"><h2>План выполнен</h2><span class="muted">${st} ${plural(st, DAYS_F)} подряд</span></div>
-        <div class="days" aria-hidden="true">${week.map((d, i) => { const dd = +d.slice(8), s = dayState(plans.get(d));
-          return `<span class="${s}${d === t ? ' today' : ''}${d > t ? ' future' : ''}"><small>${WDM[i]}</small><i>${s === 'full' ? ICON.check : dd}</i></span>`; }).join('')}</div>
-        <span class="week-more">${ICON.cal}Календарь занятий${ICON.chev}</span>
-      </section>
+      ${weekCard()}
       ${drillsProgress()}
       ${open.length ? stackCard('Основные формы', open.length, pc, `${plural(open.length, FORMS_F)} для заучивания открыто из ${BOLD.length}`)
         : `<section class="card"><div class="plan-top"><h2>Основные формы</h2><span class="muted">с главы 19</span></div><p class="hint">Формы для заучивания открываются вместе с главами, где учебник вводит времена глаголов.</p></section>`}
       <section class="card"><div class="plan-top"><h2>Алфавит</h2><span class="muted">знаю ${kn} из ${LETTERS.length}</span></div>${bar(kn, LETTERS.length, 'good')}
-        <a class="btn" href="#/abc">Открыть алфавит</a></section>
+        ${closed() ? '' : '<a class="btn" href="#/abc">Открыть алфавит</a>'}</section>
     </div></div>`;
 }
 
@@ -1944,19 +2053,21 @@ function vProgress(){
 function vProfile(){
   const u = me();
   const inv = S.invites.slice().sort((a, b) => String(b.created).localeCompare(String(a.created)));
+  const ro = closed(); // без доступа: строка о доступе, тема, пароль, выход и удаление аккаунта
   return `<div class="nav-head">${backLink('#/', 'Сегодня')}${headActs()}</div><header class="sub-head"><h1>Профиль</h1></header>
     <div class="cols"><div class="col">
-    <section class="card me-card"><span class="me xl" aria-hidden="true" data-av>${avatarInner(u)}</span><div class="who"><b>${esc(u.name || 'Без имени')}</b><span>${esc(u.email || '')}</span>
+    <section class="card"><h2>Доступ</h2><p class="acc-line${ro ? ' off' : ''}">${accessLine()}</p></section>
+    ${ro ? '' : `<section class="card me-card"><span class="me xl" aria-hidden="true" data-av>${avatarInner(u)}</span><div class="who"><b>${esc(u.name || 'Без имени')}</b><span>${esc(u.email || '')}</span>
         <button type="button" class="btn sm" data-act="avatar">${u.avatar ? 'Изменить фото' : 'Поставить фото'}</button></div>
-      <button type="button" class="icon-btn" data-act="edit-name" aria-label="Изменить имя">${ICON.pen}</button></section>
-    <section class="card"><h2>План на день</h2>
+      <button type="button" class="icon-btn" data-act="edit-name" aria-label="Изменить имя">${ICON.pen}</button></section>`}
+    ${ro ? '' : `<section class="card"><h2>План на день</h2>
       <p class="hint">Порядок задаёт учебник: новые слова приходят из лексического минимума глав до текущей, по ${NEW} в день, плюс до ${NEW} слов, которые вы добавили из словаря. После главы 36 новые слова идут из словаря, от частых к редким.</p>
       <label class="check"><input type="checkbox" id="p-parts"${partsOn() ? ' checked' : ''}><span>Основные формы глаголов в плане: до ${NEW_PARTS} новых форм для заучивания в день и повторение тех, у кого подошёл срок. Формы открываются вместе с главами учебника</span></label>
       <p class="hint">Таблицы и правила приходят в план сами: до ${NEW_DRILLS} новых таблиц и правил и до ${NEW_PREPS} карточек предлогов в день из глав до текущей, плюс повторение по сроку.</p>
     </section>
     <section class="card"><h2>Таблицы</h2>
       <label class="check"><input type="checkbox" id="p-strict"${strictOn() ? ' checked' : ''}><span>Проверять ударения и придыхания. Без проверки сверяются только буквы и подписная йота: автор пишет, что знать ударения необязательно (с. 31). Правильная форма со всеми знаками показывается после проверки в любом случае</span></label>
-    </section>
+    </section>`}
     <section class="card"><h2>Оформление</h2>
       <div class="seg3" role="radiogroup" aria-label="Тема">${[['light','Светлая'],['dark','Тёмная'],['auto','Как в системе']].map(([k, l]) =>
         `<input type="radio" name="p-theme" id="p-theme-${k}" value="${k}"${themePref() === k ? ' checked' : ''}><label for="p-theme-${k}">${l}</label>`).join('')}</div></section>
@@ -1966,10 +2077,12 @@ function vProfile(){
       <div class="field"><label for="i-note">Для кого (заметка)</label><input class="inp" type="text" id="i-note" placeholder="Например: студенты"></div>
       <div class="field"><label for="i-max">Сколько регистраций</label><select class="inp" id="i-max"><option value="1">1 человек</option><option value="5">до 5 человек</option><option value="20">до 20 человек</option><option value="0">без ограничения</option></select></div>
       <div class="field"><label for="i-exp">Действует до (необязательно)</label><input class="inp" type="date" id="i-exp"></div>
+      <div class="field"><label for="i-period">Срок доступа для новых пользователей</label><select class="inp" id="i-period">${Object.entries(ACC_PERIODS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
       <button type="button" class="btn primary" data-act="new-invite">Создать и скопировать ссылку</button>
-      <div>${inv.length ? inv.map(i => `<div class="inv"><code>${esc(i.code)}</code><span class="muted">${i.note ? esc(i.note) + ' · ' : ''}использовано ${i.uses || 0}${i.max_uses > 0 ? ' из ' + i.max_uses : ', без ограничения'}${i.expires ? ' · до ' + fmtDay(i.expires) : ''}</span>
+      <div>${inv.length ? inv.map(i => `<div class="inv"><code>${esc(i.code)}</code><span class="muted">${i.note ? esc(i.note) + ' · ' : ''}использовано ${i.uses || 0}${i.max_uses > 0 ? ' из ' + i.max_uses : ', без ограничения'}${i.expires ? ' · до ' + fmtDay(i.expires) : ''} · доступ ${esc(ACC_PERIODS[i.access_period || ''] || i.access_period)}</span>
         <div class="row"><button type="button" class="btn sm" data-act="copy-invite" data-code="${esc(i.code)}">Скопировать ссылку</button><button type="button" class="btn sm ghost danger" data-act="del-invite" data-id="${esc(i.id)}">Удалить</button></div></div>`).join('') : '<p class="hint">Приглашений пока нет.</p>'}</div>
-    </div></details>` : ''}
+    </div></details>
+    ${usersSection()}` : ''}
     <details class="fold card"><summary><span>Сменить пароль</span>${ICON.chev}</summary><div class="fold-body">
       <div class="field"><label for="p-old">Текущий пароль</label><input class="inp" type="password" id="p-old" autocomplete="current-password"></div>
       <div class="field"><label for="p-new">Новый пароль (не короче 8 символов)</label><input class="inp" type="password" id="p-new" autocomplete="new-password"></div>
@@ -1983,8 +2096,80 @@ function vProfile(){
     </div></div>`;
 }
 async function loadProfileExtras(){
-  if(isAdmin()){ try { S.invites = await pb.collection('invites').getFullList(); } catch(e){} }
+  if(isAdmin()){
+    try { S.invites = await pb.collection('invites').getFullList(); } catch(e){}
+    await loadAdminUsers();
+  }
   if(route().name === 'profile') schedule();
+}
+
+/* ---------- Пользователи (только администратор, правки 3.1) ---------- */
+const ACC_PERIODS = {'': 'бессрочно', '7d': '7 дней', '14d': '14 дней', '1m': '1 месяц', '3m': '3 месяца'};
+const ACC_DONE = {extend: 'Доступ продлён', set: 'Дата доступа изменена', unlimited: 'Доступ бессрочный', suspend: 'Доступ приостановлен', resume: 'Доступ возобновлён', note: 'Заметка сохранена'};
+const ACC_LOG = {set: 'дата изменена', unlimited: 'сделан бессрочным', suspend: 'приостановлен', resume: 'возобновлён', note: 'заметка'};
+const MONTHS_F = ['месяц', 'месяца', 'месяцев'];
+function accLogText(a){
+  const m = /^extend:(\d+)$/.exec(a || '');
+  return m ? `продлён на ${m[1]} ${plural(+m[1], MONTHS_F)}` : ACC_LOG[a] || a;
+}
+async function loadAdminUsers(){
+  if(!isAdmin()) return;
+  try { S.adminUsers = await pb.send('/api/greek/admin/users', {}); } catch(e){ return; }
+  if(route().name === 'profile') schedule();
+}
+// Фото пользователя: у других людей фото профиля защищено, администратору его отдаёт отдельный маршрут.
+// Загруженное фото ставится на место буквы без перерисовки экрана (чтобы не стереть набранную заметку)
+const UPH = new Map();
+function userPhoto(x){
+  if(x.id === me().id) return avatarSrc(me());
+  const k = x.id + '/' + x.avatar, v = UPH.get(k);
+  if(v && v !== 'loading' && v !== 'err') return v;
+  if(!v){
+    UPH.set(k, 'loading');
+    fetch('/api/greek/admin/users/' + encodeURIComponent(x.id) + '/avatar', {headers: {Authorization: pb.authStore.token}})
+      .then(r => { if(!r.ok) throw new Error(); return r.blob(); })
+      .then(b => { const src = URL.createObjectURL(b); UPH.set(k, src); $$(`[data-uface="${x.id}"]`).forEach(el => { el.innerHTML = `<img src="${src}" alt="">`; }); })
+      .catch(() => UPH.set(k, 'err'));
+  }
+  return '';
+}
+const userFace = x => { const src = x.avatar ? userPhoto(x) : ''; return `<span class="uface" aria-hidden="true" data-uface="${esc(x.id)}">${src ? `<img src="${esc(src)}" alt="">` : esc(initial(x))}</span>`; };
+function userState(x, t){
+  if(x.role === 'admin') return '<span class="tag">администратор</span>';
+  if(x.suspended) return '<span class="tag bad">приостановлен</span>';
+  if(x.access_until && x.access_until < t) return `<span class="tag bad">срок закончился ${fmtDay(x.access_until)}</span>`;
+  if(!x.access_until) return '<span class="tag ok">бессрочно</span>';
+  const k = Math.round(dnum(x.access_until) - dnum(t));
+  return `<span class="tag${k <= 7 ? ' warn' : ' ok'}">до ${fmtDay(x.access_until)}${k <= 7 ? ', ' + leftText(k) : ''}</span>`;
+}
+const untilText = d => d ? fmtDay(d) : 'бессрочно';
+// «глава 7 · занимался 30 октября»: текущая глава и последний день, когда сделано хотя бы одно задание плана
+const studyText = x => `${x.chapter > 36 ? 'учебник пройден' : 'глава ' + x.chapter} · ${x.last_day ? 'занимался ' + fmtDay(x.last_day) : 'ещё не занимался'}`;
+function usersSection(){
+  const data = S.adminUsers, n = data ? data.users.length : 0;
+  const top = `<details class="fold card" data-fold="users"${UI.folds.has('users') ? ' open' : ''}><summary><span>Пользователи${data ? ' · ' + n : ''}</span>${ICON.chev}</summary><div class="fold-body">`;
+  if(!data) return top + '<p class="hint">Загружаю…</p></div></details>';
+  const t = data.today;
+  // сначала без доступа, потом с датой (ближайшие сверху), потом бессрочные, администратор в конце
+  const rank = x => x.role === 'admin' ? 3 : !x.active ? 0 : x.access_until ? 1 : 2;
+  const list = data.users.slice().sort((a, b) => rank(a) - rank(b) || (a.access_until || '').localeCompare(b.access_until || '') || String(a.name || a.email).localeCompare(String(b.name || b.email), 'ru'));
+  return top + `<p class="hint">Когда срок доступа заканчивается или вы ставите паузу, человек видит только «Сегодня» без плана, список глав, «Прогресс» и профиль. Прогресс сохраняется, после продления всё работает как раньше. Продление считается от даты окончания, если она ещё не прошла, иначе от сегодня.</p>
+    <div class="users">${list.map(x => {
+      const id = esc(x.id), adm = x.role === 'admin';
+      const log = x.log.map(l => `<li><span class="d">${fmtDay(String(l.created).slice(0, 10))}</span> ${esc(accLogText(l.action))}${l.until_before !== l.until_after ? `: ${untilText(l.until_before)} → ${untilText(l.until_after)}` : ''}${l.note ? ` · ${esc(l.note)}` : ''}${l.by ? ` <span class="muted">(${esc(l.by)})</span>` : ''}</li>`).join('');
+      return `<div class="usr">
+        <div class="usr-head">${userFace(x)}
+          <div class="usr-main"><b>${esc(x.name || x.email)}</b><span class="muted">${x.name ? esc(x.email) + ' · ' : ''}с ${fmtDay(String(x.created).slice(0, 10))}</span><span class="muted">${studyText(x)}</span><span>${userState(x, t)}</span></div></div>
+        ${adm ? '' : `<div class="usr-acts"><button type="button" class="btn sm" data-act="acc" data-action="extend" data-months="1" data-id="${id}">+1 месяц</button><button type="button" class="btn sm" data-act="acc" data-action="extend" data-months="3" data-id="${id}">+3 месяца</button>${x.suspended ? `<button type="button" class="btn sm" data-act="acc" data-action="resume" data-id="${id}">Возобновить</button>` : `<button type="button" class="btn sm ghost danger" data-act="acc" data-action="suspend" data-id="${id}">Приостановить</button>`}</div>`}
+        <details class="usr-more" data-fold="u-${id}"${UI.folds.has('u-' + x.id) ? ' open' : ''}><summary>${adm ? 'Заметки' : 'Дата, заметка и история'}</summary>
+          ${adm ? '' : `<div class="usr-row"><div class="field"><label for="ud-${id}">Доступ до</label><input class="inp" type="date" id="ud-${id}" value="${esc(x.access_until || '')}"></div><div class="usr-btns"><button type="button" class="btn sm" data-act="acc" data-action="set" data-id="${id}">Поставить дату</button><button type="button" class="btn sm ghost" data-act="acc" data-action="unlimited" data-id="${id}">Бессрочно</button></div></div>`}
+          <div class="usr-row"><div class="field"><label for="un-${id}">Заметка (видите только вы; добавится и к продлению)</label><input class="inp" type="text" id="un-${id}" maxlength="1000" placeholder="Например: оплатил 500 ₽ 1 ноября"></div><div class="usr-btns"><button type="button" class="btn sm ghost" data-act="acc" data-action="note" data-id="${id}">Сохранить заметку</button></div></div>
+          ${log ? `<ul class="usr-log">${log}</ul>` : '<p class="hint">Истории пока нет.</p>'}
+        </details>
+      </div>`;
+    }).join('')}</div>
+    <p class="hint">Удалить пользователя совсем можно в панели администратора: <a href="/_/#/collections" target="_blank" rel="noopener">${esc(location.host)}/_/</a>, коллекция <code>users</code>. Вместе с ним удалится весь его прогресс.</p>
+  </div></details>`;
 }
 window.addEventListener('hashchange', () => { if(route().name === 'profile' && S.loaded) loadProfileExtras(); });
 document.addEventListener('change', e => {
@@ -2351,6 +2536,8 @@ document.addEventListener('click', async e => {
   const a = e.target.closest('#main [data-act]');
   if(!a) return;
   const d = a.dataset;
+  // без доступа нельзя менять главу, имя и фото (кнопок на экране нет, проверка на всякий случай)
+  if(closed() && ['avatar', 'pass', 'make-current', 'edit-name'].includes(d.act)){ toast(accMsg()); return; }
   switch(d.act){
     case 'theme': setTheme(isDark() ? 'light' : 'dark'); if(route().name === 'profile') render(true); break;
     case 'avatar': askAvatar(); break;
@@ -2420,6 +2607,7 @@ $('#auth').addEventListener('submit', async e => {
       if(!v('a-email') || !v('a-pass')) throw {msg:'Введите почту и пароль.'};
       try { await pb.collection('users').authWithPassword(v('a-email'), f.querySelector('#a-pass').value); }
       catch(err){ if(err.status === 400) throw {msg:'Неверная почта или пароль.'}; throw err; }
+      saveLS('accHide', '');
       startApp();
     } else if(f.dataset.mode === 'register'){
       const pass = f.querySelector('#a-pass').value, pass2 = f.querySelector('#a-pass2').value;
@@ -2452,7 +2640,7 @@ async function copyText(text){
   try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); }
   catch(e){ window.prompt && window.prompt('Скопируйте:', text); }
 }
-function signOut(){ saveLS(cacheKey(), null); saveLS(qKey(), null); saveLS(chKey(), null); saveLS('avatar_' + me().id, null); pb.authStore.clear(); location.hash = ''; location.reload(); }
+function signOut(){ saveLS('accHide', ''); saveLS(cacheKey(), null); saveLS(qKey(), null); saveLS(chKey(), null); saveLS('avatar_' + me().id, null); pb.authStore.clear(); location.hash = ''; location.reload(); }
 async function accountAction(a, d){
   try{
     switch(d.act){
@@ -2466,11 +2654,22 @@ async function accountAction(a, d){
         toast('Пароль изменён'); render(true); break;
       }
       case 'new-invite': {
-        const body = {code: inviteCode(), note: $('#i-note').value.trim(), max_uses: Number($('#i-max').value), uses: 0, expires: $('#i-exp').value};
+        const body = {code: inviteCode(), note: $('#i-note').value.trim(), max_uses: Number($('#i-max').value), uses: 0, expires: $('#i-exp').value, access_period: $('#i-period').value};
         const rec = await pb.collection('invites').create(body);
         S.invites.push(rec); render(true);
         copyText(`${location.origin}/?invite=${rec.code}`);
         break;
+      }
+      case 'acc': {
+        const note = ($('#un-' + d.id) || {}).value || '', date = ($('#ud-' + d.id) || {}).value || '';
+        if(d.action === 'suspend' && !arm(a, 'Точно приостановить?')) return;
+        if(d.action === 'set' && !date){ toast('Выберите дату.'); return; }
+        if(d.action === 'note' && !note.trim()){ toast('Напишите заметку.'); return; }
+        a.disabled = true;
+        try { await pb.send('/api/greek/admin/access', {method: 'POST', body: {user: d.id, action: d.action, months: Number(d.months || 0), date, note: note.trim()}}); }
+        finally { a.disabled = false; }
+        UI.folds.add('u-' + d.id);
+        await loadAdminUsers(); render(true); toast(ACC_DONE[d.action] || 'Сохранено'); break;
       }
       case 'copy-invite': copyText(`${location.origin}/?invite=${d.code}`); break;
       case 'del-invite': {
